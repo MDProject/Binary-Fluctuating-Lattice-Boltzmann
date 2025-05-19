@@ -197,8 +197,8 @@ void hydrovars(int x, int y, int z, // real density & momentum;
   };
 
   for(int k=0; k<AMREX_SPACEDIM; k++){
-    ufbar(k) = jf[k]/rho; // 2~4
-    ugbar(k) = jg[k]/phi; // 6~8
+    ufbar(k) = (std::abs(rho) > FLT_EPSILON) ? jf[k]/rho : 0.; // 2~4
+    ugbar(k) = (std::abs(phi) > FLT_EPSILON) ? jg[k]/phi : 0.; // 6~8
     // acceleration of fluid f;
     const RealVect grad_rho = grad(0);
     const RealVect grad_laplacian_rho = grad_laplacians(0);
@@ -209,13 +209,18 @@ void hydrovars(int x, int y, int z, // real density & momentum;
     agbar(k) = -cs2*(alpha0*grad_rho[k] + alpha1*grad_laplacian_rho[k]); // 12~14
   }
   // next, update the modified quantites to real quantities;
-  h(x,y,z,2) = ufbar(0) + 0.5*afbar(0) - 0.5/(tau_f+0.5)*phi/(rho+phi)*(ufbar(0)-ugbar(0) + 0.5*(afbar(0)-agbar(0))) + 0.5*nf(x,y,z,1)/std::abs(rho);//*equivDensityInv(rho); 
-  h(x,y,z,3) = ufbar(1) + 0.5*afbar(1) - 0.5/(tau_f+0.5)*phi/(rho+phi)*(ufbar(1)-ugbar(1) + 0.5*(afbar(1)-agbar(1))) + 0.5*nf(x,y,z,2)/std::abs(rho);//*equivDensityInv(rho);
-  h(x,y,z,4) = ufbar(2) + 0.5*afbar(2) - 0.5/(tau_f+0.5)*phi/(rho+phi)*(ufbar(2)-ugbar(2) + 0.5*(afbar(2)-agbar(2))) + 0.5*nf(x,y,z,3)/std::abs(rho);//*equivDensityInv(rho);
+  RealVect nfvel = {nf(x,y,z,1), nf(x,y,z,2), nf(x,y,z,3)};
+  RealVect ngvel = {ng(x,y,z,1), ng(x,y,z,2), ng(x,y,z,3)};
 
-  h(x,y,z,6) = ugbar(0) + 0.5*agbar(0) - 0.5/(tau_g+0.5)*rho/(rho+phi)*(ugbar(0)-ufbar(0) + 0.5*(agbar(0)-afbar(0))) + 0.5*ng(x,y,z,1)/std::abs(phi);//*equivDensityInv(phi);
-  h(x,y,z,7) = ugbar(1) + 0.5*agbar(1) - 0.5/(tau_g+0.5)*rho/(rho+phi)*(ugbar(1)-ufbar(1) + 0.5*(agbar(1)-afbar(1))) + 0.5*ng(x,y,z,2)/std::abs(phi);//*equivDensityInv(phi);
-  h(x,y,z,8) = ugbar(2) + 0.5*agbar(2) - 0.5/(tau_g+0.5)*rho/(rho+phi)*(ugbar(2)-ufbar(2) + 0.5*(agbar(2)-afbar(2))) + 0.5*ng(x,y,z,3)/std::abs(phi);//*equivDensityInv(phi);
+  nfvel = (std::abs(rho) > FLT_EPSILON) ? nfvel/rho : RealVect(0.);
+  ngvel = (std::abs(phi) > FLT_EPSILON) ? ngvel/phi : RealVect(0.);
+  h(x,y,z,2) = ufbar(0) + 0.5*afbar(0) - 0.5/(tau_f+0.5)*phi/(rho+phi)*(ufbar(0)-ugbar(0) + 0.5*(afbar(0)-agbar(0))) + 0.5*nfvel[0];//*equivDensityInv(rho); 
+  h(x,y,z,3) = ufbar(1) + 0.5*afbar(1) - 0.5/(tau_f+0.5)*phi/(rho+phi)*(ufbar(1)-ugbar(1) + 0.5*(afbar(1)-agbar(1))) + 0.5*nfvel[1];//*equivDensityInv(rho);
+  h(x,y,z,4) = ufbar(2) + 0.5*afbar(2) - 0.5/(tau_f+0.5)*phi/(rho+phi)*(ufbar(2)-ugbar(2) + 0.5*(afbar(2)-agbar(2))) + 0.5*nfvel[2];//*equivDensityInv(rho);
+
+  h(x,y,z,6) = ugbar(0) + 0.5*agbar(0) - 0.5/(tau_g+0.5)*rho/(rho+phi)*(ugbar(0)-ufbar(0) + 0.5*(agbar(0)-afbar(0))) + 0.5*ngvel[0];//*equivDensityInv(phi);
+  h(x,y,z,7) = ugbar(1) + 0.5*agbar(1) - 0.5/(tau_g+0.5)*rho/(rho+phi)*(ugbar(1)-ufbar(1) + 0.5*(agbar(1)-afbar(1))) + 0.5*ngvel[1];//*equivDensityInv(phi);
+  h(x,y,z,8) = ugbar(2) + 0.5*agbar(2) - 0.5/(tau_g+0.5)*rho/(rho+phi)*(ugbar(2)-ufbar(2) + 0.5*(agbar(2)-afbar(2))) + 0.5*ngvel[2];//*equivDensityInv(phi);
 
   h(x,y,z,5) = rho + phi;  // total density;
 
@@ -575,7 +580,7 @@ inline void LBM_init_droplet(const Real r,
   GpuArray<Real,3> dx = geom.CellSizeArray();
   ParallelFor(mf, IntVect(0), [=] AMREX_GPU_DEVICE(int nbx, int x, int y, int z) { 
     const Real rx = x-box[0]/2.;
-    const Real ry = y-box[1]/2;
+    const Real ry = y-box[1]/2.;
 #if (AMREX_SPACEDIM == 2)
     const Real r2 = rx*rx+ry*ry;
 #elif (AMREX_SPACEDIM == 3)
@@ -584,22 +589,19 @@ inline void LBM_init_droplet(const Real r,
 #endif
     const Real r = sqrt(r2);
 
-    const Real rho = 1.0;
-    const Real phi0 = 0.5;
-    const Real phi = phi0*tanh((R-r)/sqrt(kappa));
-
-    // transform from free energy model (rho,phi) --> (rhof, rhog); droplet is fluid f
-    const Real rhof = phi + 0.5;
-    const Real rhog = 0.5 - phi;
+    const Real rho_lo = 0.;
+    const Real rho_hi = 1.;
+    const Real rho_tot = rho_hi + rho_lo;
+    // tanh profile varying from [rho_lo] to [rho_hi], used for the density of fluid f;
+    const Real rho = (rho_hi - rho_lo)*(1.+tanh((R-r)/sqrt(kappa)))/2. + rho_lo;
+    // droplet is fluid f
     for (int i=0; i<nvel; i++) {
-      f[nbx](x,y,z,i) = w[i]*rhof;
-      g[nbx](x,y,z,i) = w[i]*rhog;
+      f[nbx](x,y,z,i) = w[i]*rho;
+      g[nbx](x,y,z,i) = w[i]*(rho_tot - rho);
     }
-
   });
   LBM_hydrovars_density(geom, mf, mg, hydrovsbar);
   thermal_noise(geom, fnoisevs, gnoisevs, rho_eq, phi_eq, rhot_eq);
-  //thermal_noise(fnoisevs, gnoisevs, hydrovsbar);
   LBM_hydrovars(geom, mf, mg, hydrovs, hydrovsbar, fnoisevs, gnoisevs);
 }
 

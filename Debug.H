@@ -199,6 +199,8 @@ void print_convergence_deviation(int x, int y, int z, int n,
         + std::abs(hydrovs_readin_frames_array4(x,y,z,n) - hydrovs_mean_array4(x,y,z,0));
 }
 
+// [step1, step2] are the start and end steps of the ensemble average; including both ends;
+// [step_int] is the interval of the ensemble average; e.g., step1=0, step2=100, step_int=10, then 0, 10, 20, ..., 100;
 AMREX_GPU_HOST AMREX_FORCE_INLINE
 void PrintConvergence(std::string plot_file_root, int step1, int step2, int step_int, MultiFab& mfab_ref, int compIdx=0,int p_tag=1, bool ifSave=false, 
             int nlevel=0, int mindigits=5, const std::string &levelPrefix="Level_", const std::string &mfPrefix="Cell"){

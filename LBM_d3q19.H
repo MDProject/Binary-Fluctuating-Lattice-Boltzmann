@@ -3,8 +3,6 @@
 
 const int nvel = 19;
 
-AMREX_GPU_MANAGED Real T = 0.;//1e-5;
-
 AMREX_GPU_MANAGED Real cs2 = 1./3.;
 AMREX_GPU_MANAGED Real cs4 = (1./3.) * (1./3.);
 //AMREX_GPU_MANAGED Real local_mass = T/cs2;//0.;

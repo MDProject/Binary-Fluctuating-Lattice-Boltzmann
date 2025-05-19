@@ -8,4 +8,5 @@ CEXE_headers += AMReX_FileIO.H
 #CEXE_headers += AMReX_Analysis.H
 #CEXE_headers += AMReX_DFT.H
 
-CEXE_sources += main_driver.cpp #CodingNote_FFT.cpp
+#CEXE_sources += main_test.cpp #CodingNote_FFT.cpp
+CEXE_sources += main_run_job.cpp
