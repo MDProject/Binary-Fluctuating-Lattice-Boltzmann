@@ -5,12 +5,13 @@
 
 const Real PI = 3.1415926;
 
+
 #ifdef AMREX_USE_CUDA
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 void loopNaN(int x, int y, int z, int ncomp, const Array4<Real>& mfab_multi_array4D,
     bool* iftrue_device_ptr, bool* ifPrintNANGrid){
 
-    if(std::isnan(mfab_multi_array4D(x,y,z,ncomp))){
+    if(amrex::Gpu::isnan(mfab_multi_array4D(x,y,z,ncomp))){
         if(*ifPrintNANGrid){
             printf("mfab(%d,%d,%d,%d) = %f\t", x,y,z,ncomp, mfab_multi_array4D(x,y,z,ncomp));
         }

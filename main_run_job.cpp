@@ -11,6 +11,10 @@ using namespace amrex;
 #include "LBM_binary.H"
 #include "Debug.H"
 #include "AMReX_FileIO.H"
+#include "AMReX_Analysis.H"
+#include "LBM_hydrovs.H"
+#include "externlib.H"
+
 
 #define SYS_DROPLET
 //#define SYS_MIXTURE
@@ -19,6 +23,7 @@ using namespace amrex;
 const string root_path = ".";   //"/home/xdengae/Binary-Fluctuating-Lattice-Boltzmann/";
 const int Ndigits = 7;
 
+extern Real alpha0; //  %.2f format
 
 inline void WriteOutput(string plot_file_root, int step,
 			const MultiFab& hydrovs,
@@ -55,7 +60,7 @@ int main(int argc, char* argv[]) {
   int nprocs = amrex::ParallelDescriptor::NProcs();
 
   // ***********************************  Basic AMReX Params ***********************************************************
-  int nx = 6; //16; //40;
+  int nx = 32; //16; //40;
   int ny = 0;   int nz = 0; // for different size system;
   int max_grid_size = nx/2;//4;
 
@@ -71,11 +76,11 @@ int main(int argc, char* argv[]) {
   bool continueFromNonFluct = true;//false; 
 
   // Total number of steps to run; MUST be integer multiples of [plot_int];
-  int nsteps = 5;//400000;//100000;
+  int nsteps = 9000;//400000;//100000;
   // ouput trajectories from step >= Out_Step; by default, it is set to be the same as [step_continue];
   int out_step = noiseSwitch? step_continue: step_continue + 0;// + nsteps/2;
-  int plot_int = 1;//2000;  // output configurations every [plot_int] steps;
-  int print_int = 100;      // print out info every [print_int] steps;
+  int plot_int = 50;//2000;  // output configurations every [plot_int] steps;
+  int print_int = 10;      // print out info every [print_int] steps;
   /*specifying time window for calculating the equilibrium state solution;
     usually be set as multiples of [plot_int], from step [last_step_index-t_window] to [last_step_index];
     i.e., [numOfFrames-1]*[plot_int], in which last_step_index is also multiples of [plot_int] */
@@ -93,8 +98,8 @@ int main(int argc, char* argv[]) {
                   // *******************************************************************************
 
 #ifdef SYS_DROPLET
-  // default droplet radius (% of box size)
-  Real radius = 0.3;
+  // default droplet radius (% of box size), %.2f format
+  const Real radius = 0.2;
 #endif
   // set up Box and Geomtry
   IntVect dom_lo(0, 0, 0);
@@ -132,7 +137,9 @@ int main(int argc, char* argv[]) {
     plot_file_dir = "data_interface";
 #endif
 #ifdef SYS_DROPLET
-    plot_file_dir = "data_droplet";
+    char plot_file_dir_cstr[20];
+    sprintf(plot_file_dir_cstr, "data_droplet_%.2f", radius);
+    plot_file_dir.assign(plot_file_dir_cstr);
 #endif
 #ifdef SYS_MIXTURE
     plot_file_dir = "data_mixture";
@@ -239,8 +246,6 @@ int main(int argc, char* argv[]) {
 #endif
   }
 
-  PrintMultiFabComp(fold, 3, 0);
-
   Print() << "check initial modified hydrodynamic quantities validity ...\n";
   MultiFabNANCheck(hydrovsbar, true, 0);
   Print() << "check initial real hydrodynamic quantities validity ...\n";
@@ -266,12 +271,14 @@ int main(int argc, char* argv[]) {
   std::vector<Real> radius_frames;
   std::vector<Real> rho_mean_frames;  //  rho mean value for each frame
   std::vector<Real> rho_sigma_frames; //  rho standard deviation for each frame
+  MultiFab rhof(ba, dm, 1, nghost);
   for (int step=step_continue+1; step <= step_continue+nsteps; ++step) {
     if(step%print_int == 0){
       Print() << "LB step " << step << " info:\n";
     }
     LBM_timestep(geom, fold, gold, fnew, gnew, hydrovs, hydrovsbar, fnoisevs, gnoisevs, rho_eq, phi_eq, rhot_eq);
-    PrintMultiFabComp(fold, 3, 0);
+
+    //PrintMultiFabComp(fold, 3, 0);
     if(noiseSwitch && step>=SF_start && step%out_SF_step == 0){
       structFact.FortStructure(hydrovsbar, 0); // default reset value = 0 used here for accumulating correlations for each frame >= [SF_start] 
     }
@@ -284,6 +291,17 @@ int main(int argc, char* argv[]) {
       Print() << "\tLB step " << step << std::endl;
       Print() << "\t**************************************\t" << std::endl;
       // ************************************* Running Process Monitor *******************************************
+      #ifdef SYS_DROPLET      
+        amrex::ParallelCopy(rhof, hydrovs, 0, 0, 1); // copy rho from hydrovs's 0th comp to rhof, i.e., density fluid f;
+        Function3DAMReX func_rho(rhof, geom);
+        RealVect vec_com = {0., 0., 0.};
+        getCenterOfMass(vec_com, func_rho, NULL, true);
+        printf("Center Of Mass: (%f,%f,%f)\n", vec_com[0], vec_com[1], vec_com[2]);
+        // Fitting equilibrirum droplet radius; \frac{1}{2}\left(1+\tanh\frac{R-\left|\bm{r}-\bm{r}_{0}\right|}{\sqrt{2W}}\right)
+        Array<Real, 3> param_arr = fittingDropletParams(func_rho, 20, 0.005, 400, kappa, radius);  // last 20 steps ensemble mean, relative error < 0.005 bound;
+        printf("fitting parameters for equilibrium density rho: (W=%f, R=%f)\n", param_arr[0], param_arr[1]);
+        radius_frames.push_back(param_arr[1]); // store the radius for each frame;
+      #endif
       if(step >= out_step && step!=step_continue+nsteps){
         WriteOutput(plot_file_root, step, hydrovs, var_names, geom, structFact, 0); // do not output [structFact] during running time;
       }
@@ -292,6 +310,15 @@ int main(int argc, char* argv[]) {
       WriteOutput(plot_file_root, step, hydrovs, var_names, geom, structFact, plot_SF);
     }
   }
+
+  #ifdef SYS_DROPLET
+  if(amrex::ParallelDescriptor::IOProcessor()){ // vector [radius_frames] is written by I/O rank so must output it in same rank;
+    string radius_frames_file = plot_file_root.substr(0, plot_file_root.length()-3); // remove the last 3 characters "plt"
+    radius_frames_file = radius_frames_file + "radius_steps_out";
+    Print() << "write out radius for each frame to file " << radius_frames_file << '\n';
+    WriteVectorToFile(radius_frames, radius_frames_file);
+  }
+  #endif
 
   // *****************************************************  Post-Processing  *********************************************************
   const IntVect box = geom.Domain().length();

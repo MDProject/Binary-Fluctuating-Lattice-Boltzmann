@@ -15,15 +15,16 @@
 
 const Real MIN_LEN_SCALE = 1e-6;
 
+
 extern void paramsVariations(Real* param_vars, const std::vector<std::vector<Real>>& combNomial, const std::vector<Real>& S_array,
     Function3DAMReX& func_rho, Real Wn, Real Rn, Real eta_W, Real eta_R, Real dt, double C0);
 
 extern const int NumOfTerms;
-extern std::vector<Real> getCoefS(int N);
+extern Vector<Real> getCoefS(int N);
 extern std::vector<std::vector<Real>> getCombNomial(int n_max);
 
-AMREX_GPU_HOST_DEVICE
-void getCenterOfMass(RealVect& vec_com, Function3DAMReX& func_rho, Real*** wt=NULL, bool freeMem=true){
+AMREX_GPU_HOST
+inline void getCenterOfMass(RealVect& vec_com, Function3DAMReX& func_rho, Real*** wt, bool freeMem){
     const BoxArray& ba = func_rho.getBoxArray();
     const Geometry& geom = func_rho.getGeometry();
     const DistributionMapping& dm = func_rho.getDistributionMapping();
@@ -66,18 +67,18 @@ void getCenterOfMass(RealVect& vec_com, Function3DAMReX& func_rho, Real*** wt=NU
         Integration::trapezoid3DWeightTensor(geom.Domain(), &wt);
     }
     Real mass = func_rho.integral3D(wt);
-    amrex::ParallelDescriptor::Barrier();
+    //amrex::ParallelDescriptor::Barrier();
     vec_com[0] = func_rho.integral3D(func_X, wt)/mass;
-    amrex::ParallelDescriptor::Barrier();
+    //amrex::ParallelDescriptor::Barrier();
     vec_com[1] = func_rho.integral3D(func_Y, wt)/mass;
-    amrex::ParallelDescriptor::Barrier();
+    //amrex::ParallelDescriptor::Barrier();
     vec_com[2] = func_rho.integral3D(func_Z, wt)/mass;
-    amrex::ParallelDescriptor::Barrier();
+    //amrex::ParallelDescriptor::Barrier();
 
     if(freeMem){    Integration::free_3d_array(wt, box[0], box[1], box[2]); }
 }
 
-AMREX_GPU_HOST_DEVICE
+AMREX_GPU_HOST
 void fittingDroplet(Function3DAMReX& func_rho, std::vector<Array<Real, 2>>& param_vec,
     const std::vector<std::vector<Real>>& combNomial, const std::vector<Real>& S_array,
     Real W0=0.02, Real R0=0.3, Real eta_W=0.2, Real eta_R=0.2, Real dt=0.02, int Nstep= 500, bool printDetails=false){    // kappa := 2W;
@@ -110,7 +111,7 @@ void fittingDroplet(Function3DAMReX& func_rho, std::vector<Array<Real, 2>>& para
 }
 
 //  param_vec[k]: k'the step parameter pair: (Wk, Rk);
-AMREX_GPU_HOST_DEVICE
+AMREX_GPU_HOST
 void fittingDroplet(Function3DAMReX& func_rho, std::vector<Array<Real, 2>>& param_vec,
     Real W0=0.02, Real R0=0.3, Real eta_W=0.2, Real eta_R=0.2, Real dt=0.02, int Nstep=300){
 
@@ -120,15 +121,15 @@ void fittingDroplet(Function3DAMReX& func_rho, std::vector<Array<Real, 2>>& para
 }
 
 // last [step_window] steps ensemble;   return [W, R, err];
-AMREX_GPU_HOST_DEVICE
+AMREX_GPU_HOST
 Array<Real, 3> fittingDropletParams(Function3DAMReX& func_rho, int step_window=30, Real undul_ratio=0.005,
     int Nstep=400, Real W0=0.02, Real R0=0.3, Real eta_W=0.2, Real eta_R=0.2, Real dt=0.02){
 
     std::vector<Array<Real, 2>> param_vec;
 
-    amrex::ParallelDescriptor::Barrier();
+    //amrex::ParallelDescriptor::Barrier();
     fittingDroplet(func_rho, param_vec, W0, R0, eta_W, eta_R, dt, Nstep);
-    amrex::ParallelDescriptor::Barrier();
+    //amrex::ParallelDescriptor::Barrier();
 
     int startIdx = Nstep - step_window;
     int endIdx = Nstep; // not included by default;    
@@ -145,11 +146,11 @@ Array<Real, 3> fittingDropletParams(Function3DAMReX& func_rho, int step_window=3
         if(iter_idx == 1){
             Print() << "Fitting Parameters does not fall below convergent bound, try at most " << Max_Iter << " times..." << '\n';
         }
-        printf("trial times %d with W0 = %f, R0 = %f, dt = %f ...\n", iter_idx, param_mean[0], param_mean[1], dt_new);
-
-        amrex::ParallelDescriptor::Barrier();
+        Print() << "trial times " << iter_idx << " with W0 = " << param_mean[0] << ", R0 = " << param_mean[1]
+                << ", dt = " << dt_new << " ...\n";
+        //amrex::ParallelDescriptor::Barrier();
         fittingDroplet(func_rho, param_vec, param_mean[0], param_mean[1], eta_W, eta_R, dt_new, Nstep);
-        amrex::ParallelDescriptor::Barrier();
+        //amrex::ParallelDescriptor::Barrier();
 
         param_mean = getArrayStatistics<2>(param_vec, 0, startIdx, endIdx);
         param_max = getArrayStatistics<2>(param_vec, 2, startIdx, endIdx);
@@ -177,7 +178,9 @@ Array<Real, 3> fittingDropletParams(Function3DAMReX& func_rho, int step_window=3
 
 // generate density multifab based on "tanh" profile:
 //                      rho := \rho_{f}\left(\bm{r}\right)\sim\frac{1}{2}\left(1+\tanh\frac{R-\left|\bm{r}-\bm{r}_{0}\right|}{\sqrt{2W}}\right)
-AMREX_GPU_HOST_DEVICE
+
+
+AMREX_GPU_HOST
 void fitting_density_mfab(MultiFab& rho_eq, MultiFab& phi_eq, MultiFab& rhot_eq, const Geometry geom,
     Real W, Real R, const RealVect& r0){
     
@@ -216,7 +219,7 @@ void fitting_density_mfab(MultiFab& rho_eq, MultiFab& phi_eq, MultiFab& rhot_eq,
     [rho_f]:    each component represents one frame;
     [R0]:       equilibrium radius, i.e., V = 4\pi/3*R0^3;
 */
-AMREX_GPU_HOST_DEVICE
+AMREX_GPU_HOST
 std::vector<Array<Real, 3>> fittingDropletCovariance(const Geometry& geom, const MultiFab& rho_f, Real R0){
     std::vector<Array<Real, 3>> CovarMat;
     // get cell size based on data index types;
@@ -243,7 +246,8 @@ std::vector<Array<Real, 3>> fittingDropletCovariance(const Geometry& geom, const
     Real*** wt;
     Integration::trapezoid3DWeightTensor(geom.Domain(), &wt);
     Eigen::MatrixXd covar_mat(3, 3);
-    //std::array<std::array<Real, 3>, 3> covar_mat = {0.};
+    amrex::Gpu::DeviceVector<Real> covar_mat_gpuArray(6, 0.0);
+    Real* covar_mat_gpuArray_ptr = covar_mat_gpuArray.data();
     for(int n=0; n<nframes; n++){
         amrex::MultiFab::Copy(rho_f_frame, rho_f, n, 0, 1, ngrow);
         Real mass = rho_f_frame.sum(0); // no ghost cells are included for sum(0)
@@ -253,41 +257,46 @@ std::vector<Array<Real, 3>> fittingDropletCovariance(const Geometry& geom, const
         for (MFIter mfi(rho_f_frame); mfi.isValid(); ++mfi) {
             const Box& valid_box = mfi.validbox();
             Array4<Real> const& rho_f_frame_ptr = rho_f_frame.array(mfi); // This function include ghost layers by default;
-            ParallelFor(valid_box, [&] AMREX_GPU_HOST_DEVICE(int i, int j, int k){
+            ParallelFor(valid_box, [=] AMREX_GPU_HOST_DEVICE(int i, int j, int k){
                 Real m_i = rho_f_frame_ptr(i,j,k,0);
-                RealVect pos = {(i+0.5*(1-itype[0]))*cell_size[0], (j+0.5*(1-itype[1]))*cell_size[1], (k+0.5*(1-itype[2]))*cell_size[2]};
-                for(int alpha=0; alpha<3; alpha++){
-                    for(int beta=alpha; beta<3; beta++){
-                        covar_mat(alpha, beta) += m_i*(pos[alpha] - vec_com[alpha])*(pos[beta] - vec_com[beta]);
+                RealVect pos_i = {(i+0.5*(1-itype[0]))*cell_size[0], (j+0.5*(1-itype[1]))*cell_size[1], (k+0.5*(1-itype[2]))*cell_size[2]};
+                for(int alpha=0; alpha<3; alpha++){ // row
+                    for(int beta=alpha; beta<3; beta++){    // column
+                        //covar_mat[alpha][beta] += m_i*(pos[alpha] - vec_com[alpha])*(pos[beta] - vec_com[beta]);
+                        int idx_1D = (3+(3-(alpha-1)))*alpha/2 + (beta-alpha); // 1D index for 2D matrix, alpha=0: 0,1,2; alpha=1: 3,4; alpha=2: 5;
+                        amrex::Gpu::Atomic::Add(&covar_mat_gpuArray_ptr[idx_1D], m_i*(pos_i[alpha] - vec_com[alpha])*(pos_i[beta] - vec_com[beta]));
                     }
                 }
             });
         }
+        // Wait for GPU to finish
+        amrex::Gpu::synchronize();
+        // Copy back to host
+        Real covar_mat_cpuArray[6];  Gpu::copy(Gpu::deviceToHost, covar_mat_gpuArray.data(), covar_mat_gpuArray.data() + 6, covar_mat_cpuArray);
+        for(int k=0; k<6; k++){
+            covar_mat_cpuArray[k] = covar_mat_cpuArray[k]/mass;
+        }
         for(int alpha=0; alpha<3; alpha++){
             for(int beta=alpha; beta<3; beta++){
-                covar_mat(alpha, beta) = covar_mat(alpha, beta)/mass;
+                covar_mat(alpha, beta) = covar_mat_cpuArray[(3+(3-(alpha-1)))*alpha/2 + (beta-alpha)];
             }
         }
+        // filling the lower triangular matrix on host;
         for(int alpha=0; alpha<3; alpha++){
             for(int beta=0; beta<alpha; beta++){
                 covar_mat(alpha, beta) = covar_mat(beta, alpha);
             }
-        }
-        /*for(int alpha=0; alpha<3; alpha++){
-            printf("(%f,%f,%f)\n", covar_mat[alpha][0], covar_mat[alpha][1], covar_mat[alpha][2]);
-        }*/    
+        }       
         Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(covar_mat);
         std::cout << "The eigenvalues of A are:" << std::endl << es.eigenvalues() << std::endl;
         if(Eigen::Success == es.info()){
             Real residue = (covar_mat*es.eigenvectors().col(0) - es.eigenvalues()[0]*es.eigenvectors().col(0)).norm();
             printf("successful with residue norm = %.2e\n", residue);
         }
-        
+        CovarMat.push_back({es.eigenvalues()[0], es.eigenvalues()[1], es.eigenvalues()[2]});
     }
-    
     return CovarMat;
 }
-
 
 /*std::vector<Array<Real, 2>> fittingDropletRadiusAnsys(const std::vector<Array<Real, 2>>& param_vec, int step_window=50){
     int Nstep = param_vec.size();

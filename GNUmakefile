@@ -14,9 +14,9 @@ DIM	= 3
 
 COMP    = g++
 
-USE_MPI   = TRUE
+USE_MPI   = FALSE
 USE_OMP   = FALSE
-USE_CUDA  = FALSE
+USE_CUDA  = TRUE
 USE_HIP   = FALSE
 
 #CUDA_COMPILER = nvcc
@@ -31,6 +31,8 @@ include ./Make.package
 include $(FHDEX_HOME)/src_common/Make.package
 VPATH_LOCATIONS   += $(FHDEX_HOME)/src_common/
 INCLUDE_LOCATIONS += $(FHDEX_HOME)/src_common/
+
+INCLUDE_LOCATIONS += $(EIGEN_DIR)
 
 include $(FHDEX_HOME)/src_analysis/Make.package
 VPATH_LOCATIONS   += $(FHDEX_HOME)/src_analysis/

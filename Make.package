@@ -3,10 +3,10 @@ CEXE_headers += LBM_binary.H
 CEXE_headers += Debug.H
 CEXE_headers += AMReX_FileIO.H
 
-#CEXE_headers += LBM_hydrovs.H
-#CEXE_headers += externlib.H
-#CEXE_headers += AMReX_Analysis.H
-#CEXE_headers += AMReX_DFT.H
+CEXE_headers += LBM_hydrovs.H
+CEXE_headers += externlib.H
+CEXE_headers += AMReX_Analysis.H
 
 #CEXE_sources += main_test.cpp #CodingNote_FFT.cpp
 CEXE_sources += main_run_job.cpp
+#CEXE_sources += safe_test_gpu_cpu.cpp

@@ -25,13 +25,14 @@
 #include <stdexcept>
 #include "AMReX_FileIO.H"
 #include <AMReX_FabArray.H>
+#include <cuda_runtime.h>
 
-AMREX_GPU_HOST_DEVICE
+AMREX_GPU_HOST
 Real func3D_test(Real x, Real y, Real z, int n){
     return x*x * y*y * z*z;
 }
 
-AMREX_GPU_HOST_DEVICE
+AMREX_GPU_HOST
 Real func3D_rho_test(Real x, Real y, Real z, int n){
     Real R = 0.1;   Real kappa = 0.02;
     return 0.5*(1+tanh((R-sqrt((x-0.5)*(x-0.5)+(y-0.5)*(y-0.5)+(z-0.5)*(z-0.5)))/sqrt(kappa)));
@@ -39,7 +40,7 @@ Real func3D_rho_test(Real x, Real y, Real z, int n){
 
 class Function3DAMReX;  // forward declaration allows you to use pointers (and references) to that class without yet having the whole class definition.
 
-AMREX_GPU_HOST_DEVICE
+AMREX_GPU_HOST
 class Integration{
     public:
         static double*** create_3d_array(int Nx, int Ny, int Nz, Real initVal=1.) {    // by default, all values are initialized to be 1.;
@@ -151,7 +152,7 @@ class Integration{
         }
 };
 
-
+AMREX_GPU_HOST
 class Function3DAMReX{
     private:
         BoxArray ba;
@@ -161,12 +162,15 @@ class Function3DAMReX{
         int ngrow;                 // Number of ghost cells
 
         MultiFab func_mfab;
+
     public:
-        AMREX_GPU_DEVICE Function3DAMReX(const BoxArray ba_, const Geometry geom_, const DistributionMapping dm_, Real (*func) (Real, Real, Real, int), int ncomp_, int ngrow_);
+        void Function3DAMReX_transfer_helper(Real (*func) (Real, Real, Real, int));
+        AMREX_GPU_HOST Function3DAMReX(const BoxArray ba_, const Geometry geom_, const DistributionMapping dm_, Real (*func) (Real, Real, Real, int), int ncomp_, int ngrow_);
 
-        AMREX_GPU_DEVICE Function3DAMReX(const BoxArray ba_, const Geometry geom_, const DistributionMapping dm_, int ngrow_, Real*** dataPtr); // 1 component total, constructed from 3D array with same size of Box;
+        void Function3DAMReX_filling_helper(Real*** dataPtr);
+        AMREX_GPU_HOST Function3DAMReX(const BoxArray ba_, const Geometry geom_, const DistributionMapping dm_, int ngrow_, Real*** dataPtr); // 1 component total, constructed from 3D array with same size of Box;
 
-        AMREX_GPU_DEVICE Function3DAMReX(const MultiFab& mfab, const Geometry& geom_) {
+        AMREX_GPU_HOST Function3DAMReX(const MultiFab& mfab, const Geometry& geom_) {
             ba = mfab.boxArray();
             geom = geom_;
             dm = mfab.DistributionMap();
@@ -182,61 +186,81 @@ class Function3DAMReX{
         // In this way, BoxArray ba_func = func3D.getBoxArray(); [ba_func] will be a new object which violates the purpose of "const"
         //  BoxArray getBoxArray() const { return ba; }  
         // providing two choices: return const or non-const reference of MultiFab members 
-        AMREX_GPU_DEVICE const MultiFab& getMultiFab() const { return func_mfab; }   // Call it by using "CONST reference" to void using the deleted constructor of MultiFab;
-        AMREX_GPU_DEVICE MultiFab& getMultiFab() { return func_mfab; }
+        AMREX_GPU_HOST const MultiFab& getMultiFab() const { return func_mfab; }   // Call it by using "CONST reference" to void using the deleted constructor of MultiFab;
+        AMREX_GPU_HOST MultiFab& getMultiFab() { return func_mfab; }
         
         
-        AMREX_GPU_DEVICE const BoxArray getBoxArray() const { return ba; }
-        AMREX_GPU_DEVICE const Geometry getGeometry() const { return geom; }
-        AMREX_GPU_DEVICE const DistributionMapping getDistributionMapping() const { return dm; }
-        AMREX_GPU_DEVICE const int getnComp() const { return ncomp; }
-        AMREX_GPU_DEVICE const int getnGrow() const { return ngrow; }
+        AMREX_GPU_HOST const BoxArray getBoxArray() const { return ba; }
+        AMREX_GPU_HOST const Geometry getGeometry() const { return geom; }
+        AMREX_GPU_HOST const DistributionMapping getDistributionMapping() const { return dm; }
+        AMREX_GPU_HOST const int getnComp() const { return ncomp; }
+        AMREX_GPU_HOST const int getnGrow() const { return ngrow; }
         
         // Modify elementary properties;
-        AMREX_GPU_DEVICE void setBoxArray(const BoxArray& ba_) { ba = ba_; } // does not affect ba in multifab;
-        AMREX_GPU_DEVICE void setGeometry(const Geometry& geom_) { geom = geom_; }
-        AMREX_GPU_DEVICE void setDistributionMapping(const DistributionMapping& dm_) { dm = dm_; }
-        AMREX_GPU_DEVICE void setnComp(int ncomp_) { ncomp = ncomp_; }
-        AMREX_GPU_DEVICE void setnGrow(int ngrow_) { ngrow = ngrow_; }
+        AMREX_GPU_HOST void setBoxArray(const BoxArray& ba_) { ba = ba_; } // does not affect ba in multifab;
+        AMREX_GPU_HOST void setGeometry(const Geometry& geom_) { geom = geom_; }
+        AMREX_GPU_HOST void setDistributionMapping(const DistributionMapping& dm_) { dm = dm_; }
+        AMREX_GPU_HOST void setnComp(int ncomp_) { ncomp = ncomp_; }
+        AMREX_GPU_HOST void setnGrow(int ngrow_) { ngrow = ngrow_; }
 
         // ******Ghost layers are not included by default******;
         // Modify element at grid point (x,y,z) of component k
-        AMREX_GPU_DEVICE void setElement(Real val, int x, int y, int z, int n);
+        AMREX_GPU_HOST void setElement(Real val, int x, int y, int z, int n);
         // Get element at grid point (x,y,z) of component k
-        AMREX_GPU_DEVICE Real getElement(int x, int y, int z, int n);
+        AMREX_GPU_HOST Real getElement(int x, int y, int z, int n);
 
         // *********** Basic ELEMENT-WISE arithmetic operation ***********
         /* cannot add "const" at the ending, in that case the member variable [func_mfab] declared const, you cannot bind its Array4<const amrex::Real> result
         to a variable of type Array4<amrex::Real> or const Array4<amrex::Real> */
-        AMREX_GPU_DEVICE void add(const Function3DAMReX& func3D);
-        AMREX_GPU_DEVICE void add(const Real scalar);    
-        AMREX_GPU_DEVICE void mult(const Function3DAMReX& func3D);
-        AMREX_GPU_DEVICE void mult(const Real scalar);
+        AMREX_GPU_HOST void add(const Function3DAMReX& func3D);
+        AMREX_GPU_HOST void add(const Real scalar);    
+        AMREX_GPU_HOST void mult(const Function3DAMReX& func3D);
+        AMREX_GPU_HOST void mult(const Real scalar);
         /*  Return the sum of component "compIdx" (-1 by default) over the MultiFab; if compIdx<0, then summation over all components
         are returned */
-        AMREX_GPU_DEVICE Real sum(const int compIdx);
+        AMREX_GPU_HOST Real sum(const int compIdx);
 
         // member functions provided for numerical computations
         /* This function is build on [integral3D] without multiplicand function, which consumes double data memory size when calling constructor; 
             Both functions DO NOT modify the original data  */
-        AMREX_GPU_DEVICE Real integral3D(const Function3DAMReX& func_multiplicand, Real*** weightTensor=NULL);    // calculate the integral of \int (*this)\cdot func_weight dV
+        AMREX_GPU_HOST Real integral3D(const Function3DAMReX& func_multiplicand, Real*** weightTensor=NULL);    // calculate the integral of \int (*this)\cdot func_weight dV
 
-        AMREX_GPU_DEVICE Real integral3D(Real*** weightTensor=NULL);
+        AMREX_GPU_HOST Real integral3D(Real*** weightTensor=NULL);
 
-        AMREX_GPU_DEVICE void fillPeriodicBC(){  func_mfab.FillBoundary(geom.periodicity()); }
+        AMREX_GPU_HOST void fillPeriodicBC(){  func_mfab.FillBoundary(geom.periodicity()); }
         
-        AMREX_GPU_DEVICE void convertNodal2Cell();
-        AMREX_GPU_DEVICE void convertCell2Nodal(bool ifPeriodic);
+        AMREX_GPU_HOST void convertNodal2Cell();
+        AMREX_GPU_HOST void convertCell2Nodal(bool ifPeriodic);
 
         // Remove Overlapping Regions for nodal-centered data; 
         //  This function WILL MODIFY original boxArray passed in for the constructor; 
         //  i.e., when calling "Function3DAMReX(BoxArray ba_, ...)", though ba_ is passed in by value, it will be affected by this function;
-        AMREX_GPU_DEVICE void makeDivision();    
-        AMREX_GPU_DEVICE void invmakeDivision(); // inverse operation of function makeDivision();
+        AMREX_GPU_HOST void makeDivision();    
+        AMREX_GPU_HOST void invmakeDivision(); // inverse operation of function makeDivision();
 
 };
 
-AMREX_GPU_DEVICE
+AMREX_GPU_HOST AMREX_FORCE_INLINE
+void Function3DAMReX::Function3DAMReX_filling_helper(Real*** dataPtr){
+
+    // Get the dimensions of the Box
+    const amrex::Box& domain = geom.Domain();
+    int nx = domain.length(0); // Size in x-direction
+    int ny = domain.length(1); // Size in y-direction
+    int nz = domain.length(2); // Size in z-direction
+
+    for (amrex::MFIter mfi(func_mfab, TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+        const amrex::Box& bx = mfi.validbox();
+        amrex::Array4<amrex::Real> const& mf_array = func_mfab.array(mfi);
+
+        // Use ParallelFor to copy data from dataPtr to the MultiFab
+        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
+            int idx = (i - domain.smallEnd(0)) + nx * (j - domain.smallEnd(1)) + nx * ny * (k - domain.smallEnd(2));
+            mf_array(i, j, k, 0) = dataPtr[i][j][k];
+        });
+    }
+}
+
 Function3DAMReX::Function3DAMReX(const BoxArray ba_, const Geometry geom_, const DistributionMapping
     dm_, int ngrow_, Real*** dataPtr){
     
@@ -247,46 +271,13 @@ Function3DAMReX::Function3DAMReX(const BoxArray ba_, const Geometry geom_, const
     ncomp = 1;
     func_mfab.define(ba, dm, ncomp, ngrow); // Allocating multifab object;
 
-    // Get the dimensions of the Box
-    const amrex::Box& domain = geom.Domain();
-    int nx = domain.length(0); // Size in x-direction
-    int ny = domain.length(1); // Size in y-direction
-    int nz = domain.length(2); // Size in z-direction
-
     // Flatten the 3D array into a contiguous 1D array
-    amrex::Gpu::DeviceVector<Real> dataPtr_d(nx * ny * nz);
-    Real* dataPtr_d_ptr = dataPtr_d.data();
-    // Copy dataPtr to the flattened 1D array
-    for (int i = 0; i < nx; ++i) {
-        for (int j = 0; j < ny; ++j) {
-            for (int k = 0; k < nz; ++k) {
-                int idx = i + nx * j + nx * ny * k; // Correct linear index
-                dataPtr_d_ptr[idx] = dataPtr[i][j][k];
-            }
-        }
-    }
-
-    for (amrex::MFIter mfi(func_mfab, TilingIfNotGPU()); mfi.isValid(); ++mfi) {
-        const amrex::Box& bx = mfi.validbox();
-        amrex::Array4<amrex::Real> const& mf_array = func_mfab.array(mfi);
-
-        // Use ParallelFor to copy data from dataPtr to the MultiFab
-        amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE(int i, int j, int k) noexcept {
-            int idx = (i - domain.smallEnd(0)) + nx * (j - domain.smallEnd(1)) + nx * ny * (k - domain.smallEnd(2));
-            mf_array(i, j, k, 0) = dataPtr_d_ptr[idx];
-        });
-    }
+    // amrex::Gpu::DeviceVector<Real> dataPtr_d(nx * ny * nz);
+    Function3DAMReX_filling_helper(dataPtr);
 }
 
-AMREX_GPU_DEVICE
-Function3DAMReX::Function3DAMReX(const BoxArray ba_, const Geometry geom_, const DistributionMapping
-    dm_, Real (*func) (Real, Real, Real, int), int ncomp_=1, int ngrow_=0) : ncomp(ncomp_), ngrow(ngrow_){
-            
-    ba = ba_;
-    geom = geom_;
-    dm = dm_; 
-    ngrow = ngrow_;
-    ncomp = ncomp_;
+AMREX_GPU_HOST AMREX_FORCE_INLINE
+void Function3DAMReX::Function3DAMReX_transfer_helper(Real (*func) (Real, Real, Real, int)){
     //  IndexType typ({AMREX_D_DECL(1,1,1)}); // nodal
     // ************     to be consistent with Trapezoid formula     ************
     const IntVect box = geom.Domain().length();
@@ -305,13 +296,11 @@ Function3DAMReX::Function3DAMReX(const BoxArray ba_, const Geometry geom_, const
         cell_size = {Lx/(box[0]-1), Ly/(box[1]-1), Lz/(box[2]-1)};
         Print() << "nodal centered\n";
     }
-    
-    func_mfab.define(ba, dm, ncomp, ngrow); // Allocating multifab object;
     for(amrex::MFIter mfi(func_mfab, TilingIfNotGPU()); mfi.isValid(); ++mfi){
         const amrex::Box& bx = mfi.validbox();
         amrex::Array4<amrex::Real> const& mf_array = func_mfab.array(mfi);
 
-        ParallelFor(bx, ncomp, [=] AMREX_GPU_DEVICE(int i, int j, int k, int n){
+        ParallelFor(bx, ncomp, [=] AMREX_GPU_HOST_DEVICE(int i, int j, int k, int n){
             //mf_array(i,j,k,n) = func(i*cell_size[0],j*cell_size[1],k*cell_size[2],n);
             mf_array(i,j,k,n) = func((i+0.5*(1-itype[0]))*cell_size[0],(j+0.5*(1-itype[1]))*cell_size[1],(k+0.5*(1-itype[2]))*cell_size[2],n);
             //printf("Nodal(%d,%d,%d) = %f\t",i,j,k,mf_array(i,j,k,n));
@@ -319,11 +308,24 @@ Function3DAMReX::Function3DAMReX(const BoxArray ba_, const Geometry geom_, const
     }
 }
 
+Function3DAMReX::Function3DAMReX(const BoxArray ba_, const Geometry geom_, const DistributionMapping
+    dm_, Real (*func) (Real, Real, Real, int), int ncomp_=1, int ngrow_=0) : ncomp(ncomp_), ngrow(ngrow_){
+            
+    ba = ba_;
+    geom = geom_;
+    dm = dm_; 
+    ngrow = ngrow_;
+    ncomp = ncomp_;
+    func_mfab.define(ba, dm, ncomp, ngrow); // Allocating multifab object;
+    Function3DAMReX_transfer_helper(func);
+    // This function will fill the MultiFab with values from the provided function;
+}
+
 /*
     copy constructor of 'Function3DAMReX' is implicitly deleted because field 'func_mfab' has a deleted copy constructor
         MultiFab func_mfab;
 */
-AMREX_GPU_DEVICE
+AMREX_GPU_HOST
 void Function3DAMReX::add(const Function3DAMReX& func3D) {
     const MultiFab& mfab_add = func3D.getMultiFab();
 
@@ -333,30 +335,30 @@ void Function3DAMReX::add(const Function3DAMReX& func3D) {
         /* function to be added; Since it is declared to be const, so here use type "Array4<const amrex::Real>" instead;
         see comments in class definition */
         const amrex::Array4<const amrex::Real>& mf_array_add = mfab_add.array(mfi);   
-        ParallelFor(bx, ncomp, [=] AMREX_GPU_DEVICE(int i, int j, int k, int n){
+        ParallelFor(bx, ncomp, [=] AMREX_GPU_HOST_DEVICE(int i, int j, int k, int n){
             mf_array(i,j,k,n) = mf_array(i,j,k,n) + mf_array_add(i,j,k,n);
         });
     }
 }
 
-AMREX_GPU_DEVICE
+AMREX_GPU_HOST
 void Function3DAMReX::add(const Real scalar){
     func_mfab.plus(scalar, 0, ncomp);
 }
 
 // overlapping points in nodal-centered data will NOT affect the amrex::Multiply operations;
-AMREX_GPU_DEVICE
+AMREX_GPU_HOST
 void Function3DAMReX::mult(const Function3DAMReX& func3D){
     const MultiFab& mfab_mult = func3D.getMultiFab();
     amrex::MultiFab::Multiply(func_mfab, mfab_mult, 0, 0, ncomp, 0); // using library provided by AMReX;
 }
 
-AMREX_GPU_DEVICE
+AMREX_GPU_HOST
 void Function3DAMReX::mult(const Real scalar){
     func_mfab.mult(scalar);
 }
 
-AMREX_GPU_DEVICE
+AMREX_GPU_HOST
 Real Function3DAMReX::sum(const int compIdx){
     IndexType itype = ba.ixType();
     if(itype.nodeCentered()){ // remove overlapping grid points' effect
@@ -367,7 +369,7 @@ Real Function3DAMReX::sum(const int compIdx){
         //Print() << func_mfab.boxArray() << '\n';
     }else{
         if(!itype.cellCentered()){
-            throw runtime_error("sum() only supports either nodal-centered or cell-centered data!\n");
+            amrex::Abort("sum() only supports either nodal-centered or cell-centered data!\n");
         }
     }
 
@@ -380,7 +382,7 @@ Real Function3DAMReX::sum(const int compIdx){
             Array4<Real> const& nodal_arr = func_mfab.array(mfi);
             amrex::ParallelFor(valid_box, [=] AMREX_GPU_DEVICE (int i, int j, int k) {
                 // CUDA kernel code
-                atomicAdd(sumVal_ptr, nodal_arr(i, j, k, compIdx));
+                amrex::Gpu::Atomic::Add(sumVal_ptr, nodal_arr(i, j, k, compIdx));
             });
         }
     } else {
@@ -389,7 +391,7 @@ Real Function3DAMReX::sum(const int compIdx){
             Array4<Real> const& nodal_arr = func_mfab.array(mfi);
             amrex::ParallelFor(valid_box, ncomp, [=] AMREX_GPU_DEVICE (int i, int j, int k, int n) {
                 // CUDA kernel code
-                atomicAdd(sumVal_ptr, nodal_arr(i, j, k, n));
+                amrex::Gpu::Atomic::Add(sumVal_ptr, nodal_arr(i, j, k, n));
             });
         }
     }
@@ -402,7 +404,7 @@ Real Function3DAMReX::sum(const int compIdx){
     return sumVal;
 }
 
-AMREX_GPU_DEVICE
+AMREX_GPU_HOST
 void Function3DAMReX::setElement(Real val, int x, int y, int z, int n){
     for (MFIter mfi(func_mfab, TilingIfNotGPU()); mfi.isValid(); ++mfi) {
         const Box& bx = mfi.validbox();
@@ -414,7 +416,7 @@ void Function3DAMReX::setElement(Real val, int x, int y, int z, int n){
     }
 }
 
-AMREX_GPU_DEVICE
+AMREX_GPU_HOST
 Real Function3DAMReX::getElement(int x, int y, int z, int n){
     Real val = -1e-30;
     for (MFIter mfi(func_mfab, TilingIfNotGPU()); mfi.isValid(); ++mfi) {
@@ -429,22 +431,27 @@ Real Function3DAMReX::getElement(int x, int y, int z, int n){
     return val;
 }
 
-AMREX_GPU_DEVICE
+AMREX_GPU_HOST
 Real Function3DAMReX::integral3D(const Function3DAMReX& func_multiplicand, Real*** weightTensor){
     // First compare box size if they are same;
     // Build copy for function itself to avoid directly modifying the data during integral calculations;
     Function3DAMReX func_copy(func_mfab, geom); 
     
     Real*** wt = weightTensor;
+    bool ifFreeWeightMat = false;
     if(wt == NULL){
         Integration::trapezoid3DWeightTensor(geom.Domain(), &wt);
+        ifFreeWeightMat = true;
     }
     func_copy.mult(func_multiplicand);
     Real intVal = func_copy.integral3D(wt);
+    if(ifFreeWeightMat){
+        Integration::free_3d_array(wt, geom.Domain().length(0), geom.Domain().length(1), geom.Domain().length(2));
+    }
     return intVal;
 }
 
-AMREX_GPU_DEVICE
+AMREX_GPU_HOST
 Real Function3DAMReX::integral3D(Real*** weightTensor){
     Function3DAMReX func_copy(func_mfab, geom);
     IndexType itype = ba.ixType();
@@ -492,7 +499,7 @@ Real Function3DAMReX::integral3D(Real*** weightTensor){
     return val*cell_volume;
 }
 
-AMREX_GPU_DEVICE
+AMREX_GPU_HOST
 void Function3DAMReX::convertNodal2Cell(){
     // MultiFab copy for original data; By default it is nodal-centered;
     MultiFab func_mfab_copy;
@@ -523,7 +530,7 @@ void Function3DAMReX::convertNodal2Cell(){
     }
 }
 
-AMREX_GPU_DEVICE
+AMREX_GPU_HOST
 void Function3DAMReX::convertCell2Nodal(bool ifPeriodic=true){
     // MultiFab copy for original data; By default it is cell-centered;
     MultiFab func_mfab_copy;
@@ -560,7 +567,7 @@ void Function3DAMReX::convertCell2Nodal(bool ifPeriodic=true){
     }
 }
 
-AMREX_GPU_DEVICE
+AMREX_GPU_HOST
 void Function3DAMReX::makeDivision(){
     // ********* these lines solves Problem I ?? ****************************
     MultiFab func_mfab_copy;
@@ -586,7 +593,7 @@ void Function3DAMReX::makeDivision(){
             }
         }
     }else{
-        throw runtime_error("makeDivision() only supports nodal-centered data!\n");
+        amrex::Abort("makeDivision() only supports nodal-centered data!\n");
     }
     const RealBox& physical_domain = geom.ProbDomain();
     const Array<int, AMREX_SPACEDIM> is_periodic = {geom.isPeriodic(0), geom.isPeriodic(1), geom.isPeriodic(2)};
@@ -603,7 +610,7 @@ void Function3DAMReX::makeDivision(){
     func_mfab.FillBoundary(geom.periodicity());
 }
 
-AMREX_GPU_DEVICE
+AMREX_GPU_HOST
 void Function3DAMReX::invmakeDivision(){
     // **************************************
     MultiFab func_mfab_copy;
@@ -629,7 +636,7 @@ void Function3DAMReX::invmakeDivision(){
             }
         }
     }else{
-        throw runtime_error("makeDivision() only supports nodal-centered data!\n");
+        amrex::Abort("makeDivision() only supports nodal-centered data!\n");
     }
     const RealBox& physical_domain = geom.ProbDomain();
     const Array<int, AMREX_SPACEDIM> is_periodic = {geom.isPeriodic(0), geom.isPeriodic(1), geom.isPeriodic(2)};

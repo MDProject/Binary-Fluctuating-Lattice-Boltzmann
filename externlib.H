@@ -13,6 +13,10 @@
 #include "AMReX_Analysis.H"
 #include "LBM_hydrovs.H"
 
+
+AMREX_GPU_HOST
+extern void getCenterOfMass(RealVect& vec_com, Function3DAMReX& func_rho, Real*** wt, bool freeMem);
+
 // These library function are directly converted from python, see "CodingNote_analysis_supp.ipynb" for details; 
 
 const int NumOfTerms = 20;
@@ -48,9 +52,9 @@ double factorial(int n) {
     return result;
 }
 
-AMREX_GPU_HOST_DEVICE
-std::vector<Real> getCoefS(int N) {
-    std::vector<Real> coefSVec(N, 0.);
+AMREX_GPU_HOST
+Vector<Real> getCoefS(int N) {
+    Vector<Real> coefSVec(N, 0.);
     double* A_array = (double*)malloc(N * sizeof(double));
     A_array[0] = 1.0;
 
@@ -86,7 +90,7 @@ std::vector<Real> getCoefS(int N) {
 }
 
 // get given fixed size 2D matrix for binomial coefficients; same with function comb(), just for efficiency;
-AMREX_GPU_HOST_DEVICE
+AMREX_GPU_HOST
 std::vector<std::vector<Real>> getCombNomial(int n_max=4) {
     std::vector<std::vector<Real>> comb_nomial_array;
 
@@ -102,7 +106,7 @@ std::vector<std::vector<Real>> getCombNomial(int n_max=4) {
 
 //  Total terms of series summation is equal to the size of vector [S_array]; More terms, more accurate;
 //  Input [n] can only be 2, 3 & 4 three cases; 
-AMREX_GPU_HOST_DEVICE
+AMREX_GPU_HOST
 Real integral_func2_series(int n, double d, double c, const std::vector<std::vector<Real>>& comb_nomial_array, const std::vector<Real>& S_array, double delta=0.4) {
 
     long double int_val = 0.0;
@@ -192,7 +196,7 @@ double integral_func1_series(int n, double a, int N=100) {
 std::vector<std::vector<Real>> combNomial = getCombNomial(4);
     std::vector<Real> S_array = getCoefS(NumOfTerms);
 */
-AMREX_GPU_HOST_DEVICE
+AMREX_GPU_HOST
 double JRn_Rn(const std::vector<std::vector<Real>>& combNomial, const std::vector<Real>& S_array,
         double Wn, double Rn, double eta_R, double dt, double C0=1.) {
     double param_c = Rn / sqrt(2 * Wn);
@@ -203,7 +207,7 @@ double JRn_Rn(const std::vector<std::vector<Real>>& combNomial, const std::vecto
     return JRn_Rn_val;
 }
 
-AMREX_GPU_HOST_DEVICE
+AMREX_GPU_HOST
 double JRn_Wn(const std::vector<std::vector<Real>>& combNomial, const std::vector<Real>& S_array,
         double Wn, double Rn, double eta_R, double dt, double C0=1.) {
     double param_c = Rn / sqrt(2 * Wn);
@@ -215,7 +219,7 @@ double JRn_Wn(const std::vector<std::vector<Real>>& combNomial, const std::vecto
            4 * Wn2 * integral_func2_series(3, param_d, param_c, combNomial, S_array, 1.0/param_d));
 }
 
-AMREX_GPU_HOST_DEVICE
+AMREX_GPU_HOST
 double JWn_Rn(const std::vector<std::vector<Real>>& combNomial, const std::vector<Real>& S_array,
         double Wn, double Rn, double eta_W, double dt, double C0=1.) {
     double param_c = Rn / sqrt(2 * Wn);
@@ -226,7 +230,7 @@ double JWn_Rn(const std::vector<std::vector<Real>>& combNomial, const std::vecto
            4 * M_PI * integral_func2_series(3, param_d, param_c, combNomial, S_array, 1.0/param_d));
 }
 
-AMREX_GPU_HOST_DEVICE
+AMREX_GPU_HOST
 double JWn_Wn(const std::vector<std::vector<Real>>& combNomial, const std::vector<Real>& S_array,
         double Wn, double Rn, double eta_W, double dt, double C0=1.) {
     double param_c = Rn / sqrt(2 * Wn);
@@ -251,7 +255,7 @@ Real func_MfWn_mult(Real x, Real y, Real z, Real sqrt2Wn, Real Rn, const RealVec
     return dist*inv_cosh_val*inv_cosh_val;
 }
 
-AMREX_GPU_HOST_DEVICE
+AMREX_GPU_HOST
 double MfWn(Function3DAMReX& func_rho, double Wn, double Rn, const RealVect& r0) {
     Real sqrt2Wn = sqrt(2.*Wn);
 
@@ -299,7 +303,7 @@ Real func_MfRn_mult(Real x, Real y, Real z, Real sqrt2Wn, Real Rn, const RealVec
     return inv_cosh_val*inv_cosh_val;
 }
 
-AMREX_GPU_HOST_DEVICE
+AMREX_GPU_HOST
 double MfRn(Function3DAMReX& func_rho, Real Wn, Real Rn, const RealVect& r0){
     Real sqrt2Wn = sqrt(2.*Wn);
 
@@ -361,7 +365,7 @@ Real KRn(Real Wn, Real Rn){
     return factor*(val_term1 + val_term2);
 }
 
-AMREX_GPU_HOST_DEVICE
+AMREX_GPU_HOST
 void paramsVariations(Real* param_vars, const std::vector<std::vector<Real>>& combNomial, const std::vector<Real>& S_array,
     Function3DAMReX& func_rho, Real Wn, Real Rn, Real eta_W, Real eta_R, Real dt, double C0=1.){
 
@@ -384,7 +388,7 @@ void paramsVariations(Real* param_vars, const std::vector<std::vector<Real>>& co
     matB[1][1] = eta_R*dt;
     // vector C assembly
     RealVect vec_r0 = {0., 0., 0.};
-    getCenterOfMass(vec_r0, func_rho);  //  of size 3*1, center of mass position vector
+    getCenterOfMass(vec_r0, func_rho, NULL, true);  //  of size 3*1, center of mass position vector
 
     vecC[0] = MfWn(func_rho,Wn,Rn,vec_r0) - 0.5*KWn(Wn,Rn);
     vecC[1] = MfRn(func_rho,Wn,Rn,vec_r0) - 0.5*KRn(Wn,Rn);
