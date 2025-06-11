@@ -221,7 +221,7 @@ void fitting_density_mfab(MultiFab& rho_eq, MultiFab& phi_eq, MultiFab& rhot_eq,
 */
 AMREX_GPU_HOST
 std::vector<Array<Real, 3>> fittingDropletCovariance(const Geometry& geom, const MultiFab& rho_f, Real R0){
-    std::vector<Array<Real, 3>> CovarMat;
+    std::vector<Array<Real, 3>> CovarMatEigVal;
     // get cell size based on data index types;
     const IntVect box = geom.Domain().length();
     RealBox real_box = geom.ProbDomain();
@@ -293,9 +293,9 @@ std::vector<Array<Real, 3>> fittingDropletCovariance(const Geometry& geom, const
             Real residue = (covar_mat*es.eigenvectors().col(0) - es.eigenvalues()[0]*es.eigenvectors().col(0)).norm();
             printf("successful with residue norm = %.2e\n", residue);
         }
-        CovarMat.push_back({es.eigenvalues()[0], es.eigenvalues()[1], es.eigenvalues()[2]});
+        CovarMatEigVal.push_back({es.eigenvalues()[0], es.eigenvalues()[1], es.eigenvalues()[2]});
     }
-    return CovarMat;
+    return CovarMatEigVal;
 }
 
 /*std::vector<Array<Real, 2>> fittingDropletRadiusAnsys(const std::vector<Array<Real, 2>>& param_vec, int step_window=50){

@@ -9,11 +9,12 @@
 #include "Debug.H"
 
 //#define RANDRAW
+const IntVect print_grid(0, 0, 0); // grid to print out
 
 AMREX_GPU_MANAGED unsigned long long seed = 12345ULL;  // A fixed seed for reproducibility in each independent CUDA program;
 AMREX_GPU_MANAGED Real tau_f = 1./2.; // tau=0.5*(1.+1./sqrt(3.)) minimizes spurious currents according to Swift et al.
 AMREX_GPU_MANAGED Real tau_g = 1./2.;
-AMREX_GPU_MANAGED Real alpha0 = 4.;//0.95; also = \mathcal{G} in paper;
+AMREX_GPU_MANAGED Real alpha0 = 0.;//0.95; also = \mathcal{G} in paper;
 AMREX_GPU_MANAGED Real alpha1 = 0.;//alpha1;
 const Real epsilon = 1e-14;
 
@@ -214,6 +215,7 @@ void hydrovars(int x, int y, int z, // real density & momentum;
 
   nfvel = (std::abs(rho) > FLT_EPSILON) ? nfvel/rho : RealVect(0.);
   ngvel = (std::abs(phi) > FLT_EPSILON) ? ngvel/phi : RealVect(0.);
+  // 0.75 ufbar + 0.25 ugbar + O(0); 
   h(x,y,z,2) = ufbar(0) + 0.5*afbar(0) - 0.5/(tau_f+0.5)*phi/(rho+phi)*(ufbar(0)-ugbar(0) + 0.5*(afbar(0)-agbar(0))) + 0.5*nfvel[0];//*equivDensityInv(rho); 
   h(x,y,z,3) = ufbar(1) + 0.5*afbar(1) - 0.5/(tau_f+0.5)*phi/(rho+phi)*(ufbar(1)-ugbar(1) + 0.5*(afbar(1)-agbar(1))) + 0.5*nfvel[1];//*equivDensityInv(rho);
   h(x,y,z,4) = ufbar(2) + 0.5*afbar(2) - 0.5/(tau_f+0.5)*phi/(rho+phi)*(ufbar(2)-ugbar(2) + 0.5*(afbar(2)-agbar(2))) + 0.5*nfvel[2];//*equivDensityInv(rho);
@@ -222,7 +224,8 @@ void hydrovars(int x, int y, int z, // real density & momentum;
   h(x,y,z,7) = ugbar(1) + 0.5*agbar(1) - 0.5/(tau_g+0.5)*rho/(rho+phi)*(ugbar(1)-ufbar(1) + 0.5*(agbar(1)-afbar(1))) + 0.5*ngvel[1];//*equivDensityInv(phi);
   h(x,y,z,8) = ugbar(2) + 0.5*agbar(2) - 0.5/(tau_g+0.5)*rho/(rho+phi)*(ugbar(2)-ufbar(2) + 0.5*(agbar(2)-afbar(2))) + 0.5*ngvel[2];//*equivDensityInv(phi);
 
-  h(x,y,z,5) = rho + phi;  // total density;
+  Real rho_tot = rho + phi; // total density;
+  h(x,y,z,5) = rho_tot;  // total density;
 
   // acceleration of fluid f; equal to modified quantities;
   h(x,y,z,9) = afbar(0);
@@ -232,6 +235,10 @@ void hydrovars(int x, int y, int z, // real density & momentum;
   h(x,y,z,12) = agbar(0);
   h(x,y,z,13) = agbar(1);
   h(x,y,z,14) = agbar(2);
+  
+  h(x,y,z,15) = (rho*ufbar(0) + phi*ugbar(0) + 0.5*(rho*afbar(0) + phi*agbar(0)))/rho_tot; // barcentric velocity in x direction;
+  h(x,y,z,16) = (rho*ufbar(1) + phi*ugbar(1) + 0.5*(rho*afbar(1) + phi*agbar(1)))/rho_tot; // barcentric velocity in y direction;
+  h(x,y,z,17) = (rho*ufbar(2) + phi*ugbar(2) + 0.5*(rho*afbar(2) + phi*agbar(2)))/rho_tot; // barcentric velocity in z direction;
 }
 
 // calculate real hydrodynamic moments for whole lattice
@@ -245,8 +252,8 @@ inline void LBM_hydrovars(const Geometry& geom,
   auto const & hbar = hydrovsbar.arrays();
   auto const & nf = fnoisevs.arrays(); // multiple noise Array4D arrays of size [box_index, geometry_size, nvel], i.e., nf[nbx](i,j,k,ncomp); 
   auto const & ng = gnoisevs.arrays();
-  //Print() << "Call function kernel 'hydrovars' ...\n";
-  ParallelFor(hydrovs, IntVect(2), [=] AMREX_GPU_DEVICE(int nbx, int x, int y, int z) {
+  // 0 ghost cells for hydrovars ???? need to be further checked;
+  ParallelFor(hydrovs, IntVect(0), [=] AMREX_GPU_DEVICE(int nbx, int x, int y, int z) {
     hydrovars(x, y, z, f[nbx], g[nbx], h[nbx], hbar[nbx], nf[nbx], ng[nbx]);
   });
   hydrovs.FillBoundary(geom.periodicity());
@@ -268,7 +275,15 @@ void hydrovars_bar_density(int x, int y, int z,
   }
   hb(x,y,z,0) = rho;
   hb(x,y,z,1) = phi;
-  
+
+  // for test of structure factor of modified hydrodynamic moments; not necessary for the real simulation;
+  const Array1D<Real,0,nvel> mf = moments(x,y,z,f);
+  const Array1D<Real,0,nvel> mg = moments(x,y,z,g);
+  for (int i=1; i<=AMREX_SPACEDIM; ++i) {     // momentum/velocity i=1..3
+    hb(x,y,z,i+1) = mf(i)/mf(0);               // u_f to be stored in 2..4
+    hb(x,y,z,i+2+AMREX_SPACEDIM) = mg(i)/mg(0);// u_g to be stored in 6..8
+  }
+  hb(x,y,z,2+AMREX_SPACEDIM) = mf(0) + mg(0); // total density to be stored in 5;
 }
 
 // calculate modified hydrodynamic moments for whole lattice
@@ -412,6 +427,26 @@ void collide(int x, int y, int z,
   mPhif = phi_moments(fields, 0, uf, af);
   mPhig = phi_moments(fields, 1, ug, ag);
 
+  /*if(x==print_grid[0] && y==print_grid[1] && z==print_grid[2]) {
+    printf("moments in collide() = \n");
+    for(int i=0; i<nvel; ++i) {
+      printf("mfEq(%d) = %.8f\t", i, mfEq(i));
+      printf("mPhif(%d) = %.8f\t", i, mPhif(i));
+      printf("mgEq(%d) = %.8f\t", i, mgEq(i));
+      printf("mPhig(%d) = %.8f\t", i, mPhig(i));
+    }
+    printf("\ndensity in collide() = \n");
+    printf("h(%d) = %.8f\t", 0, h(x,y,z,0));
+    printf("h(%d) = %.8f\t", 1, h(x,y,z,1));
+    printf("\ncenter-of-mass velocity & acceleration in collide() = \n");
+    for(int i=0; i<3; ++i) {
+      printf("ub(%d) = %.8f\t", i, v_b[i]);
+      printf("af(%d) = %.8f\t", i, af[i]);
+      printf("ag(%d) = %.8f\t", i, ag[i]);
+    }
+    printf("\n");
+  }*/
+
   // thermal noise in moment space: fn(x,y,z,ncomp) & gn(x,y,z,ncomp);
   const Real tau_f_bar = tau_f*(1.+0.5/tau_f);
   const Real tau_g_bar = tau_g*(1.+0.5/tau_g);
@@ -517,8 +552,8 @@ inline void LBM_init_mixture(const Geometry& geom,
     const Array4<Real>& f = mf.array(mfi);
     const Array4<Real>& g = mg.array(mfi);
     ParallelForRNG(valid_box, [=] AMREX_GPU_DEVICE(int x, int y, int z, RandomEngine const& engine) {
-      const Real rho = 2.*C1 + (x+y+z)/500.;// + C2;
-      const Real phi = 2.*C2 - (x+y+z)/500.;//(C1-C2)+0.01*RandomNormal(0., 1., engine);
+      const Real rho = 2.*C1;// + (x+y+z)/500.;// + C2;
+      const Real phi = 2.*C2;// - (x+y+z)/500.;//(C1-C2)+0.01*RandomNormal(0., 1., engine);
       for (int i=0; i<nvel; i++) {
 	      f(x,y,z,i) = w[i]*rho;
 	      g(x,y,z,i) = w[i]*phi;

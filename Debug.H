@@ -107,8 +107,10 @@ Array1D<Real,0,2> compute_multifab_fluctuation(MultiFab& mfab, const int ncomp){
     // Synchronize to ensure the kernel has completed
     amrex::Gpu::synchronize();
     // Copy results back to the host
-    amrex::Real mean = mean_device.dataValue();
-    int N = N_device.dataValue();
+    Real mean;
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost, mean_device.dataPtr(), mean_device.dataPtr() + 1, &mean); 
+    int N;
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost, N_device.dataPtr(), N_device.dataPtr() + 1, &N);
     // Compute the mean
     if (N > 0) {
         mean /= N;
@@ -123,7 +125,8 @@ Array1D<Real,0,2> compute_multifab_fluctuation(MultiFab& mfab, const int ncomp){
     // Synchronize to ensure the kernel has completed
     amrex::Gpu::synchronize();
     // Copy the variance result back to the host
-    amrex::Real var = var_device.dataValue();
+    Real var;
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost, var_device.dataPtr(), var_device.dataPtr() + 1, &var);
     // Compute the variance
     if (N > 0) {
         var /= N;
