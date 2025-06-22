@@ -9,12 +9,12 @@
 #include "Debug.H"
 
 //#define RANDRAW
-const IntVect print_grid(0, 0, 0); // grid to print out
+//const IntVect print_grid(0, 0, 0); // grid to print out
 
 AMREX_GPU_MANAGED unsigned long long seed = 12345ULL;  // A fixed seed for reproducibility in each independent CUDA program;
 AMREX_GPU_MANAGED Real tau_f = 1./2.; // tau=0.5*(1.+1./sqrt(3.)) minimizes spurious currents according to Swift et al.
 AMREX_GPU_MANAGED Real tau_g = 1./2.;
-AMREX_GPU_MANAGED Real alpha0 = 0.;//0.95; also = \mathcal{G} in paper;
+AMREX_GPU_MANAGED Real alpha0 = 1.5;//0.;//0.95; also = \mathcal{G} in paper;
 AMREX_GPU_MANAGED Real alpha1 = 0.;//alpha1;
 const Real epsilon = 1e-14;
 
@@ -83,6 +83,7 @@ void thermal_noise(const Geometry& geom, MultiFab& fnoisevs, MultiFab& gnoisevs,
       fnoise(x,y,z,0) = 0.;
       gnoise(x,y,z,0) = 0.;
       for (int a=1; a<=AMREX_SPACEDIM; a++) {
+        // \sqrt(0.5)*random normal distribution;
         fnoise(x,y,z,a) = sqrt(2.*(tau_f_bar - 0.5*tau_f_bar2)*kBT*std::abs(rho*phi/rhot))*RandomNormal(0., 1., engine);
         gnoise(x,y,z,a) = -fnoise(x,y,z,a);
       }
@@ -215,7 +216,7 @@ void hydrovars(int x, int y, int z, // real density & momentum;
 
   nfvel = (std::abs(rho) > FLT_EPSILON) ? nfvel/rho : RealVect(0.);
   ngvel = (std::abs(phi) > FLT_EPSILON) ? ngvel/phi : RealVect(0.);
-  // 0.75 ufbar + 0.25 ugbar + O(0); 
+  // 0.75 ufbar + 0.25 ugbar + 0.5*nfvel; 
   h(x,y,z,2) = ufbar(0) + 0.5*afbar(0) - 0.5/(tau_f+0.5)*phi/(rho+phi)*(ufbar(0)-ugbar(0) + 0.5*(afbar(0)-agbar(0))) + 0.5*nfvel[0];//*equivDensityInv(rho); 
   h(x,y,z,3) = ufbar(1) + 0.5*afbar(1) - 0.5/(tau_f+0.5)*phi/(rho+phi)*(ufbar(1)-ugbar(1) + 0.5*(afbar(1)-agbar(1))) + 0.5*nfvel[1];//*equivDensityInv(rho);
   h(x,y,z,4) = ufbar(2) + 0.5*afbar(2) - 0.5/(tau_f+0.5)*phi/(rho+phi)*(ufbar(2)-ugbar(2) + 0.5*(afbar(2)-agbar(2))) + 0.5*nfvel[2];//*equivDensityInv(rho);
@@ -235,10 +236,16 @@ void hydrovars(int x, int y, int z, // real density & momentum;
   h(x,y,z,12) = agbar(0);
   h(x,y,z,13) = agbar(1);
   h(x,y,z,14) = agbar(2);
-  
+
   h(x,y,z,15) = (rho*ufbar(0) + phi*ugbar(0) + 0.5*(rho*afbar(0) + phi*agbar(0)))/rho_tot; // barcentric velocity in x direction;
   h(x,y,z,16) = (rho*ufbar(1) + phi*ugbar(1) + 0.5*(rho*afbar(1) + phi*agbar(1)))/rho_tot; // barcentric velocity in y direction;
   h(x,y,z,17) = (rho*ufbar(2) + phi*ugbar(2) + 0.5*(rho*afbar(2) + phi*agbar(2)))/rho_tot; // barcentric velocity in z direction;
+
+  h(x,y,z,18) = nfvel[0]; // noise f related terms;
+  h(x,y,z,19) = ngvel[0]; // noise g related terms;
+
+  h(x,y,z,20) = ufbar(0); // lb velocity f in x direction;
+  h(x,y,z,21) = ugbar(0); // lb velocity g in x direction;
 }
 
 // calculate real hydrodynamic moments for whole lattice
@@ -592,6 +599,40 @@ inline void LBM_init(const Geometry& geom,
   LBM_hydrovars(geom, mf, mg, hydrovs, hydrovsbar, fnoisevs, gnoisevs);
   amrex::Gpu::synchronize();  AMREX_GPU_ERROR_CHECK();
 }
+
+// flat interface 
+void LBM_init_stripe(const Real frac, const Geometry& geom,
+				  MultiFab& mf, MultiFab& mg,
+			    MultiFab& hydrovs, MultiFab& hydrovsbar,
+          MultiFab& fnoisevs, MultiFab& gnoisevs,
+          MultiFab& rho_eq, MultiFab& phi_eq, MultiFab& rhot_eq) {
+  
+  const Real rho_lo = 0.1;
+  const Real rho_hi = 2.;
+  GpuArray<Real,3> dx = geom.CellSizeArray();
+  const IntVect box = geom.Domain().length();
+  const Real rho_t = rho_hi + rho_lo;
+  const Real pos_lo = (-0.5*frac)*box[2]; // position of the lower interface
+  const Real pos_hi = (0.5*frac)*box[2]; // position of the upper interface
+  auto const & f = mf.arrays();
+  auto const & g = mg.arrays();
+  ParallelFor(mf, IntVect(0), [=] AMREX_GPU_DEVICE(int nbx, int x, int y, int z) {
+    const Real pos = z-box[2]/2;
+    const Real rho =  (rho_hi - rho_lo)*0.5*(std::tanh((pos-pos_lo)/std::sqrt(kappa)) + std::tanh((pos_hi-pos)/std::sqrt(kappa))) + rho_lo;
+    for (int i=0; i<nvel; i++) {
+      f[nbx](x,y,z,i) = w[i]*rho;
+      g[nbx](x,y,z,i) = w[i]*(rho_t-rho);
+    }
+  });
+  
+  LBM_hydrovars_density(geom, mf, mg, hydrovsbar);
+  amrex::Gpu::synchronize();  AMREX_GPU_ERROR_CHECK();
+  thermal_noise(geom, fnoisevs, gnoisevs, rho_eq, phi_eq, rhot_eq); // rho_eq, phi_eq, rhot_eq here have no meaningful values, since kBT=0.;
+  amrex::Gpu::synchronize();  AMREX_GPU_ERROR_CHECK();
+  LBM_hydrovars(geom, mf, mg, hydrovs, hydrovsbar, fnoisevs, gnoisevs);
+  amrex::Gpu::synchronize();  AMREX_GPU_ERROR_CHECK();
+}
+
 
 // binary droplet of C1 and C2
 inline void LBM_init_droplet(const Real r,

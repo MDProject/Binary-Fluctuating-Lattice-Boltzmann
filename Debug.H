@@ -3,6 +3,25 @@
 #include "LBM_binary.H"
 #include <cmath>
 
+/*
+[15:26, 6/18/2025] Nikhil Karthikeyan: BL_PROFILE_VAR("{function name}",{function name});
+
+You can get basic profiling by adding this line into the beginning of each function
+[15:27, 6/18/2025] holyavalongg: Wow
+[15:27, 6/18/2025] Nikhil Karthikeyan: and when compiling the source code, add this line 
+
+TINY_PROFILE = TRUE
+
+To your makefile
+[15:27, 6/18/2025] holyavalongg: thanks, I will mark it if later I need it
+[15:27, 6/18/2025] Nikhil Karthikeyan: at the end of your executable output, you will see a table detailing how long each function being benchmarked took to execute
+[15:28, 6/18/2025] Nikhil Karthikeyan: and what proportion of runtime was used for each function
+
+[15:29, 6/18/2025] Nikhil Karthikeyan: so you don't have a bunch of time statements in your code
+[15:30, 6/18/2025] Nikhil Karthikeyan: or needing to use valgrind to check for memory leaks
+*/
+
+
 const Real PI = 3.1415926;
 
 

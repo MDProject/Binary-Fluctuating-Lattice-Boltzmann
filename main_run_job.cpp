@@ -15,15 +15,19 @@ using namespace amrex;
 #include "LBM_hydrovs.H"
 #include "externlib.H"
 
+#define STRUCT_HYDROVARS
+//#define STRUCT_LB_HYDROVARS
 
-#define SYS_DROPLET
+//#define SYS_DROPLET
 //#define SYS_MIXTURE
-//#define SYS_FLATE_INTERFACE
+#define SYS_FLATE_INTERFACE
 
 const string root_path = ".";   //"/home/xdengae/Binary-Fluctuating-Lattice-Boltzmann/";
 const int Ndigits = 7;
 
 extern Real alpha0; //  %.2f format
+
+AMREX_GPU_MANAGED Real init_frac = 0.5; // fractional size of droplet or stripe
 
 inline void WriteOutput(string plot_file_root, int step,
 			const MultiFab& hydrovs,
@@ -69,27 +73,27 @@ int main(int argc, char* argv[]) {
   // ************************************************  MAIN PARAMS SETTING   ******************************************************
   // *******************************************  change for each job *******************************************************************
   // set to be 0 for noise=0 case; set to be the step's number of the checkpoint file when noise != 0;
-  int step_continue = 0;//1300400;//3500400;
+  int step_continue = 0;//500;//1300400;//3500400;
 
   // [true] for a: kBT=0; b: kBT>0 && switching on noise for the FIRST time;
   // [false] only if hope to continue from chkpoint in which noise>0;
-  bool continueFromNonFluct = true;//false; 
+  bool continueFromNonFluct = true;//false;
 
   // Total number of steps to run; MUST be integer multiples of [plot_int];
-  int nsteps = 9000;//400000;//100000;
+  int nsteps = 600000; // 2000
   // ouput trajectories from step >= Out_Step; by default, it is set to be the same as [step_continue];
-  int out_step = noiseSwitch? step_continue: step_continue + 0;// + nsteps/2;
-  int plot_int = 50;//2000;  // output configurations every [plot_int] steps;
-  int print_int = 10;      // print out info every [print_int] steps;
+  int out_step = noiseSwitch? step_continue: step_continue + nsteps/2;
+  int plot_int = 2000;//10;//1000; // output configurations every [plot_int] steps;
+  int print_int = 200;      // print out info every [print_int] steps;
   /*specifying time window for calculating the equilibrium state solution;
     usually be set as multiples of [plot_int], from step [last_step_index-t_window] to [last_step_index];
     i.e., [numOfFrames-1]*[plot_int], in which last_step_index is also multiples of [plot_int] */
-  const int t_window = 10*plot_int;   
+  const int t_window = 50*plot_int; 
   int out_noise_step = plot_int;    // output noise terms every [out_noise_step] steps;
 
   // [plot_SF_window] is the time window for calculating the structure factor;
-  int plot_SF_window = 100000; // not affected by [plot_int]; out freq controlled by [out_SF_step]
-  int out_SF_step = 50;
+  int plot_SF_window = 0;//200000; // not affected by [plot_int]; out freq controlled by [out_SF_step]
+  int out_SF_step = 100; // 50*2, select every 100 steps to calcualte Structure Factor;
   // default output parameters
   int plot_SF = noiseSwitch? plot_SF_window: 0; // switch on writting Structure Factor for noise!=0 case only;
   if(plot_SF_window == 0)   Print() << "plot_SF_window = 0 and No stuct factor will be calculated\n";
@@ -109,7 +113,9 @@ int main(int argc, char* argv[]) {
   dom_hi = IntVect(nx-1, nx-1, nx-1);     // for droplet
 #endif
 #ifdef SYS_FLATE_INTERFACE
-  dom_hi = IntVect(nx-1, ny-1, nz-1);     // for flate interface
+  nx = 8; ny = 256; nz = 64; // for flate interface with height = 64 lbu and stripe width = 8 lbu & length = 256 lbu
+  max_grid_size = nx;
+  dom_hi = IntVect(nx-1, ny-1, nz-1);
 #endif
 #ifdef SYS_MIXTURE
   dom_hi = IntVect(nx-1, nx-1, nx-1);     // for mixture
@@ -124,9 +130,9 @@ int main(int argc, char* argv[]) {
   ba.maxSize(max_grid_size);
   DistributionMapping dm(ba);
   // need two halo layers for laplacian operator
-  int nghost = 2; //2;
+  int nghost = 2;
   // number of hydrodynamic fields to output
-  int nhydro = 15; //6; 
+  int nhydro = 22;//18; //6;
   // **********************************************************************************************
 
   // ************************************  File directory settings  ********************************
@@ -141,8 +147,15 @@ int main(int argc, char* argv[]) {
     sprintf(plot_file_dir_cstr, "data_droplet_%.2f", radius);
     plot_file_dir.assign(plot_file_dir_cstr);
 #endif
+
 #ifdef SYS_MIXTURE
     plot_file_dir = "data_mixture";
+    #ifdef STRUCT_HYDROVARS
+    plot_file_dir = plot_file_dir + "_hydrovars";
+    #endif
+    #ifdef STRUCT_LB_HYDROVARS
+    plot_file_dir = plot_file_dir + "_lb_hydrovars";
+    #endif
 #endif
   // check point file root name;
   check_point_root_f = root_path + "/" + plot_file_dir + "/f_checkpoint";
@@ -179,11 +192,11 @@ int main(int argc, char* argv[]) {
   MultiFab gold(ba, dm, nvel, nghost);
   MultiFab gnew(ba, dm, nvel, nghost);
   MultiFab hydrovs(ba, dm, nhydro, nghost);
-  MultiFab hydrovsbar(ba, dm, nhydro, nghost); // modified hydrodynamic variables, only contains rho & phi two hydrovars used for grad & laplacian
+  MultiFab hydrovsbar(ba, dm, 15/*nhydro*/, nghost); // modified hydrodynamic variables, only contains rho & phi two hydrovars used for grad & laplacian
   MultiFab fnoisevs(ba, dm, nvel, nghost); // thermal noise storage of fluid f for each step;
   MultiFab gnoisevs(ba, dm, nvel, nghost);
   // set up hydro-variable names for output
-  const Vector<std::string> var_names = VariableNames(nhydro);
+  const Vector<std::string> var_names = VariableNames(nhydro, true);
 
   if(noiseSwitch){
     Print() << "Noise switch on\n";
@@ -193,7 +206,7 @@ int main(int argc, char* argv[]) {
     rho_eq.FillBoundary(geom.periodicity());  // fill the ghost layers with the equilibrium state solution
     phi_eq.FillBoundary(geom.periodicity());
     rhot_eq.FillBoundary(geom.periodicity());
-    printf("Numerical equilibrium state solution lower bound:\tmin rho_eq: %f\tmin phi_eq: %f\n", rho_eq.min(0), phi_eq.min(0));
+    //printf("Numerical equilibrium state solution lower bound:\tmin rho_eq: %f\tmin phi_eq: %f\n", rho_eq.min(0), phi_eq.min(0));
   }else{
     Print() << "Noise switch off, calculating the equilibrium state solutions...\n";
   }
@@ -229,7 +242,7 @@ int main(int argc, char* argv[]) {
     LBM_init(geom, fold, gold, hydrovs, hydrovsbar, fnoisevs, gnoisevs, 
     f_last_frame, g_last_frame, rho_eq, phi_eq, rhot_eq);
 #ifdef SYS_MIXTURE
-    PrintDensityFluctuation(hydrovs, var_names, -1); // check the data uniformity for mixture system only;
+    //PrintDensityFluctuation(hydrovs, var_names, -1); // check the data uniformity for mixture system only;
 #endif
   }else{  // running from initial default states;
 
@@ -239,6 +252,7 @@ int main(int argc, char* argv[]) {
 #endif
 #ifdef SYS_FLATE_INTERFACE
     Print() << "Init flate interface system ...\n";
+    LBM_init_stripe(init_frac, geom, fold, gold, hydrovs, hydrovsbar, fnoisevs, gnoisevs, rho_eq, phi_eq, rhot_eq);
 #endif
 #ifdef SYS_DROPLET
     Print() << "Init droplet system ...\n";
@@ -252,11 +266,18 @@ int main(int argc, char* argv[]) {
   MultiFabNANCheck(hydrovs, true, 0);
 
   // set up StructFact
-  const Vector<int> pairA = { 0, 1, 2, 3, 4, 0, 2, 3, 4};
-  const Vector<int> pairB = { 0, 1, 2, 3, 4, 1, 3, 4, 2};
-  const Vector<Real> var_scaling = { 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+  // ufbar(20) ugbar(21) nf(18), 
+  const Vector<int> pairA = { 0,  1,  0,  2,  3,  4,  6,  7,  8,  2,
+                              9,  15, 16, 17, 15, 18, 19, 20, 21, 
+                              20, 20, 21}; 
+  const Vector<int> pairB = { 0,  1,  1,  2,  3,  4,  6,  7,  8,  6,
+                              9,  15, 16, 17, 16, 18, 19, 20, 21, 
+                              21, 18, 18};
+  const Vector<Real> var_scaling = { 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+                                     1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+                                     1.0, 1.0, 1.0};
   StructFact structFact(ba, dm, var_names, var_scaling, pairA, pairB);
-  //structFact.Reset(); 
+  //structFact.Reset();
 
   // Write a plotfile of the initial data if plot_int > 0 and starting from initial default states
   if (plot_int > 0 && step_continue == 0)
@@ -280,7 +301,7 @@ int main(int argc, char* argv[]) {
 
     //PrintMultiFabComp(fold, 3, 0);
     if(noiseSwitch && step>=SF_start && step%out_SF_step == 0){
-      structFact.FortStructure(hydrovsbar, 0); // default reset value = 0 used here for accumulating correlations for each frame >= [SF_start] 
+      structFact.FortStructure(hydrovs/*hydrovs*/, 0); // default reset value = 0 used here for accumulating correlations for each frame >= [SF_start] 
     }
     if(noiseSwitch && step%out_noise_step == 0){
       WriteOutNoise(plot_file_root, step, fnoisevs, gnoisevs, geom, Ndigits);
@@ -288,7 +309,7 @@ int main(int argc, char* argv[]) {
     if (plot_int > 0 && step%plot_int == 0){
       //PrintMultiFabComp(fold, 3, 0);
       Print() << "\t**************************************\t" << std::endl;
-      Print() << "\tLB step " << step << std::endl;
+      Print() << "\tLB step " << step << " & Output" << std::endl;
       Print() << "\t**************************************\t" << std::endl;
       // ************************************* Running Process Monitor *******************************************
       #ifdef SYS_DROPLET      
@@ -321,6 +342,18 @@ int main(int argc, char* argv[]) {
   #endif
 
   // *****************************************************  Post-Processing  *********************************************************
+  // write out last frame checkpoint
+  pltfile_f = amrex::Concatenate(check_point_root_f, step_continue+nsteps, Ndigits);
+  pltfile_g = amrex::Concatenate(check_point_root_g, step_continue+nsteps, Ndigits);
+  pltfile_f = pltfile_f + "_alpha0_" + format("%.2f", alpha0) + "_xi_" + format("%.1e", kBT)
+    + "_size" + format("%d-%d-%d", dom_hi[0]-dom_lo[0]+1, dom_hi[1]-dom_lo[1]+1, dom_hi[2]-dom_lo[2]+1);
+  pltfile_g = pltfile_g + "_alpha0_" + format("%.2f", alpha0) + "_xi_" + format("%.1e", kBT)
+    + "_size" + format("%d-%d-%d", dom_hi[0]-dom_lo[0]+1, dom_hi[1]-dom_lo[1]+1, dom_hi[2]-dom_lo[2]+1);
+  Vector< std::string > varname_chk;  varname_chk.push_back("rho_chk");
+  WriteSingleLevelPlotfile(pltfile_f, fold, varname_chk, geom, 0, 0); // time & step = 0 just for simplicity; meaningless here;
+  varname_chk.clear();  varname_chk.push_back("phi_chk");
+  WriteSingleLevelPlotfile(pltfile_g, gold, varname_chk, geom, 0, 0); // time & step = 0 just for simplicity; meaningless here;
+  
   const IntVect box = geom.Domain().length();
 #ifdef SYS_DROPLET
   // notice that here [radius] is the ratio of droplet radius to the box size;

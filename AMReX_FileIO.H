@@ -161,7 +161,7 @@ std::string format(const std::string& format_str, Args... args) {
 }
 
 // Hydrodynamic Variable Names Vectors; used for saving data
-inline Vector<std::string> VariableNames(const int numVars) {
+inline Vector<std::string> VariableNames(const int numVars, bool ifPrint=false) {
     // set variable names for output
     Vector<std::string> var_names(numVars);
     std::string name;
@@ -195,29 +195,56 @@ inline Vector<std::string> VariableNames(const int numVars) {
       var_names[cnt++] = name;
     }
   
-    // The following part is cutoff due to [cnt]>=variables number we input
-    // pxx, pxy, pxz, pyy, pyz, pzz
-    for (int i=0; i<AMREX_SPACEDIM, cnt<numVars; ++i) {
-      for (int j=i; j<AMREX_SPACEDIM, cnt<numVars; ++j) {
-        name = "p";
+    // barycentric velocity;
+    for (int i=0; i<AMREX_SPACEDIM && cnt<numVars; ++i) {
+        name = "ub";
         name += (120+i);
-        name += (120+j);
         var_names[cnt++] = name;
-      }
     }
-    // kinetic moments
-    for (; cnt<numVars;) {
-      name = "m";
-      name += std::to_string(cnt);
+    // overbar noise terms for fluid f
+    name = "nfbar"; // comp=18 of hydrovars 
+    name += (120);
+    var_names[cnt++] = name;
+    name = "ngbar"; // comp=19 of hydrovars
+    name += (120);
+    var_names[cnt++] = name;
+    name = "ufbar"; // comp=20 of hydrovars
+    name += (120);
+    var_names[cnt++] = name;
+    name = "ugbar"; // comp=21 of hydrovars
+    name += (120);
+    var_names[cnt++] = name;
+    /*for (int i=0; i<AMREX_SPACEDIM && cnt<numVars; i++) {
+      name = "nfbar";
+      name += (120+i);
       var_names[cnt++] = name;
     }
-  
-    // Print all variable names
-    Print() << "Variable names list: ";
-    for(int n=0; n<cnt; n++){
-      Print() << var_names[n] << " ";
+    // overbar noise terms for fluid g
+    for (int i=0; i<AMREX_SPACEDIM && cnt<numVars; i++) {
+      name = "ngbar";
+      name += (120+i);
+      var_names[cnt++] = name;
     }
-    Print() << '\n';
+    // lb velocity for fluid f
+    for (int i=0; i<AMREX_SPACEDIM && cnt<numVars; i++) {
+      name = "ufbar";
+      name += (120+i);
+      var_names[cnt++] = name;
+    }
+    // lb velocity for fluid g
+    for (int i=0; i<AMREX_SPACEDIM && cnt<numVars; i++) {
+      name = "ugbar";
+      name += (120+i);
+      var_names[cnt++] = name;
+    }*/
+    // Print all variable names
+    if(ifPrint){
+        Print() << "Variable names list: ";
+        for(int n=0; n<cnt; n++){
+            Print() << var_names[n] << " ";
+        }
+        Print() << "total " << cnt << " variables\n";
+    }
   
     return var_names;
   }
