@@ -7,6 +7,7 @@
 #include <cmath>
 #include "AMReX_FileIO.H"
 #include "Debug.H"
+#include "LBM_hydrovs.H"
 
 //#define RANDRAW
 //const IntVect print_grid(0, 0, 0); // grid to print out
@@ -14,11 +15,11 @@
 AMREX_GPU_MANAGED unsigned long long seed = 12345ULL;  // A fixed seed for reproducibility in each independent CUDA program;
 AMREX_GPU_MANAGED Real tau_f = 1./2.; // tau=0.5*(1.+1./sqrt(3.)) minimizes spurious currents according to Swift et al.
 AMREX_GPU_MANAGED Real tau_g = 1./2.;
-AMREX_GPU_MANAGED Real alpha0 = 1.5;//0.;//0.95; also = \mathcal{G} in paper;
+AMREX_GPU_MANAGED Real alpha0 = 1.5;//4.;//1.5;//0.;//0.95; also = \mathcal{G} in paper;
 AMREX_GPU_MANAGED Real alpha1 = 0.;//alpha1;
 const Real epsilon = 1e-14;
 
-AMREX_GPU_MANAGED Real kappa = 0.001;
+AMREX_GPU_MANAGED Real kappa = 0.1;
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 Real equivDensityInv(Real density){
@@ -63,7 +64,7 @@ Real pressure(Real rho, Real phi) {
 
 AMREX_GPU_HOST AMREX_FORCE_INLINE
 void thermal_noise(const Geometry& geom, MultiFab& fnoisevs, MultiFab& gnoisevs,
-  MultiFab& rho_eqvs, MultiFab& phi_eqvs, MultiFab& rhot_eqvs){ // additional 3 equilibrium state
+  MultiFab& rho_eqvs, MultiFab& phi_eqvs, MultiFab& rhot_eqvs, const RealVect& pos_com){ // additional 3 equilibrium state
 
   const Real tau_f_bar = 1./(tau_f+0.5);
   const Real tau_g_bar = tau_f_bar;
@@ -77,9 +78,21 @@ void thermal_noise(const Geometry& geom, MultiFab& fnoisevs, MultiFab& gnoisevs,
     const Array4<Real>& rhot_eq = rhot_eqvs.array(mfi);
     const Box& valid_box = mfi.validbox();
     ParallelForRNG(valid_box, [=] AMREX_GPU_DEVICE(int x, int y, int z, const RandomEngine& engine) {
-      Real rho = rho_eq(x, y, z, 0);
-      Real phi = phi_eq(x, y, z, 0);
-      Real rhot = rhot_eq(x, y, z, 0);  // equilibrium density
+      // shifted coordinates for center of mass frame;
+      int x_shift = x - static_cast<int>(pos_com[0]);
+      int y_shift = y - static_cast<int>(pos_com[1]);
+      int z_shift = z - static_cast<int>(pos_com[2]);
+      // periodic BC for shifted coordinates;
+      const Box& domain = geom.Domain();
+      if(x_shift < domain.smallEnd(0)) x_shift += domain.length(0);
+      if(x_shift > domain.bigEnd(0))   x_shift -= domain.length(0);
+      if(y_shift < domain.smallEnd(1)) y_shift += domain.length(1);
+      if(y_shift > domain.bigEnd(1))   y_shift -= domain.length(1);
+      if(z_shift < domain.smallEnd(2)) z_shift += domain.length(2);
+      if(z_shift > domain.bigEnd(2))   z_shift -= domain.length(2);
+      Real rho = rho_eq(x_shift, y_shift, z_shift, 0);
+      Real phi = phi_eq(x_shift, y_shift, z_shift, 0);
+      Real rhot = rhot_eq(x_shift, y_shift, z_shift, 0);  // equilibrium density
       fnoise(x,y,z,0) = 0.;
       gnoise(x,y,z,0) = 0.;
       for (int a=1; a<=AMREX_SPACEDIM; a++) {
@@ -93,7 +106,6 @@ void thermal_noise(const Geometry& geom, MultiFab& fnoisevs, MultiFab& gnoisevs,
       }
     });
   }
-
   fnoisevs.FillBoundary(geom.periodicity());
   gnoisevs.FillBoundary(geom.periodicity());
 }
@@ -287,8 +299,8 @@ void hydrovars_bar_density(int x, int y, int z,
   const Array1D<Real,0,nvel> mf = moments(x,y,z,f);
   const Array1D<Real,0,nvel> mg = moments(x,y,z,g);
   for (int i=1; i<=AMREX_SPACEDIM; ++i) {     // momentum/velocity i=1..3
-    hb(x,y,z,i+1) = mf(i)/mf(0);               // u_f to be stored in 2..4
-    hb(x,y,z,i+2+AMREX_SPACEDIM) = mg(i)/mg(0);// u_g to be stored in 6..8
+    hb(x,y,z,i+1) = (std::abs(mf(0)) > FLT_EPSILON) ? mf(i)/mf(0) : 0.;               // u_f to be stored in 2..4
+    hb(x,y,z,i+2+AMREX_SPACEDIM) = (std::abs(mg(0)) > FLT_EPSILON) ? mg(i)/mg(0) : 0.; // u_g to be stored in 6..8
   }
   hb(x,y,z,2+AMREX_SPACEDIM) = mf(0) + mg(0); // total density to be stored in 5;
 }
@@ -535,7 +547,10 @@ inline void LBM_timestep(const Geometry& geom,
   // here all Multifab variables;
   LBM_hydrovars_density(geom, fold, gold, hydrovsbar);
   //amrex::Gpu::synchronize();  AMREX_GPU_ERROR_CHECK();
-  thermal_noise(geom, fnoisevs, gnoisevs, rho_eq, phi_eq, rhot_eq);
+  // update center of mass hydrodynamic variables after collision & streaming;
+  RealVect pos_com;
+  update_com(geom, pos_com, hydrovsbar);
+  thermal_noise(geom, fnoisevs, gnoisevs, rho_eq, phi_eq, rhot_eq, pos_com);
   //amrex::Gpu::synchronize();  AMREX_GPU_ERROR_CHECK();
   LBM_hydrovars(geom, fold, gold, hydrovs, hydrovsbar, fnoisevs, gnoisevs);
   //amrex::Gpu::synchronize();  AMREX_GPU_ERROR_CHECK();
@@ -608,7 +623,7 @@ void LBM_init_stripe(const Real frac, const Geometry& geom,
           MultiFab& rho_eq, MultiFab& phi_eq, MultiFab& rhot_eq) {
   
   const Real rho_lo = 0.1;
-  const Real rho_hi = 2.;
+  const Real rho_hi = 3.;
   GpuArray<Real,3> dx = geom.CellSizeArray();
   const IntVect box = geom.Domain().length();
   const Real rho_t = rho_hi + rho_lo;
@@ -666,7 +681,7 @@ inline void LBM_init_droplet(const Real r,
     const Real r = sqrt(r2);
 
     const Real rho_lo = 0.;
-    const Real rho_hi = 1.;
+    const Real rho_hi = 3.;//1.;
     const Real rho_tot = rho_hi + rho_lo;
     // tanh profile varying from [rho_lo] to [rho_hi], used for the density of fluid f;
     const Real rho = (rho_hi - rho_lo)*(1.+tanh((R-r)/sqrt(kappa)))/2. + rho_lo;
