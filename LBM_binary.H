@@ -66,6 +66,7 @@ AMREX_GPU_HOST AMREX_FORCE_INLINE
 void thermal_noise(const Geometry& geom, MultiFab& fnoisevs, MultiFab& gnoisevs,
   MultiFab& rho_eqvs, MultiFab& phi_eqvs, MultiFab& rhot_eqvs, const RealVect& pos_com){ // additional 3 equilibrium state
 
+  const Box domain = geom.Domain();
   const Real tau_f_bar = 1./(tau_f+0.5);
   const Real tau_g_bar = tau_f_bar;
   const Real tau_f_bar2 = tau_f_bar*tau_f_bar;
@@ -79,11 +80,10 @@ void thermal_noise(const Geometry& geom, MultiFab& fnoisevs, MultiFab& gnoisevs,
     const Box& valid_box = mfi.validbox();
     ParallelForRNG(valid_box, [=] AMREX_GPU_DEVICE(int x, int y, int z, const RandomEngine& engine) {
       // shifted coordinates for center of mass frame;
-      int x_shift = x - static_cast<int>(pos_com[0]);
-      int y_shift = y - static_cast<int>(pos_com[1]);
-      int z_shift = z - static_cast<int>(pos_com[2]);
+      int x_shift = x;// - static_cast<int>(pos_com[0]);
+      int y_shift = y;// - static_cast<int>(pos_com[1]);
+      int z_shift = z;// - static_cast<int>(pos_com[2]);
       // periodic BC for shifted coordinates;
-      const Box& domain = geom.Domain();
       if(x_shift < domain.smallEnd(0)) x_shift += domain.length(0);
       if(x_shift > domain.bigEnd(0))   x_shift -= domain.length(0);
       if(y_shift < domain.smallEnd(1)) y_shift += domain.length(1);
@@ -124,7 +124,6 @@ RealVect gradient(int x, int y, int z, const Array4<Real>& field, int icomp) {
     For D3Q19, \nabla_\alpha [field] = 1/cs^2*\sum_i *w_i n(r+e_i\Delta t)e_{i\alpha}
     */
   }
-
   return gradient;
 }
 
@@ -513,7 +512,8 @@ inline void LBM_timestep(const Geometry& geom,
   MultiFab& fnew, MultiFab& gnew,
   MultiFab& hydrovs, MultiFab& hydrovsbar,
   MultiFab& fnoisevs, MultiFab& gnoisevs,
-  MultiFab& rho_eq, MultiFab& phi_eq, MultiFab& rhot_eq) {
+  MultiFab& rho_eq, MultiFab& phi_eq, MultiFab& rhot_eq,
+  amrex::Vector<RealVect>& com_ref) {
 
   fold.FillBoundary(geom.periodicity());
   gold.FillBoundary(geom.periodicity());  // MUST fullfil the periodic boundary condition at EACH STEP !!!
@@ -550,6 +550,8 @@ inline void LBM_timestep(const Geometry& geom,
   // update center of mass hydrodynamic variables after collision & streaming;
   RealVect pos_com;
   update_com(geom, pos_com, hydrovsbar);
+  //pos_com -= com_ref[0];
+  //Print() << "COM is " << pos_com << '\n';
   thermal_noise(geom, fnoisevs, gnoisevs, rho_eq, phi_eq, rhot_eq, pos_com);
   //amrex::Gpu::synchronize();  AMREX_GPU_ERROR_CHECK();
   LBM_hydrovars(geom, fold, gold, hydrovs, hydrovsbar, fnoisevs, gnoisevs);
@@ -584,7 +586,9 @@ inline void LBM_init_mixture(const Geometry& geom,
   }
   LBM_hydrovars_density(geom, mf, mg, hydrovsbar);
   amrex::Gpu::synchronize();  AMREX_GPU_ERROR_CHECK();
-  thermal_noise(geom, fnoisevs, gnoisevs, rho_eq, phi_eq, rhot_eq);
+  RealVect pos_com;
+  update_com(geom, pos_com, hydrovsbar);
+  thermal_noise(geom, fnoisevs, gnoisevs, rho_eq, phi_eq, rhot_eq, pos_com);
   amrex::Gpu::synchronize();  AMREX_GPU_ERROR_CHECK();
   LBM_hydrovars(geom, mf, mg, hydrovs, hydrovsbar, fnoisevs, gnoisevs);
   amrex::Gpu::synchronize();  AMREX_GPU_ERROR_CHECK();
@@ -609,8 +613,13 @@ inline void LBM_init(const Geometry& geom,
 
   LBM_hydrovars_density(geom, mf, mg, hydrovsbar);
   amrex::Gpu::synchronize();  AMREX_GPU_ERROR_CHECK();
-  thermal_noise(geom, fnoisevs, gnoisevs, rho_eq, phi_eq, rhot_eq);
+  RealVect pos_com;
+  update_com(geom, pos_com, hydrovsbar);
+  thermal_noise(geom, fnoisevs, gnoisevs, rho_eq, phi_eq, rhot_eq, pos_com);
   amrex::Gpu::synchronize();  AMREX_GPU_ERROR_CHECK();
+  Print() << "fnoisevs NAN check: \n";
+  MultiFabNANCheck(fnoisevs, true, 0);
+  Print() << "fnoisevs NAN check complete: \n";
   LBM_hydrovars(geom, mf, mg, hydrovs, hydrovsbar, fnoisevs, gnoisevs);
   amrex::Gpu::synchronize();  AMREX_GPU_ERROR_CHECK();
 }
@@ -642,7 +651,9 @@ void LBM_init_stripe(const Real frac, const Geometry& geom,
   
   LBM_hydrovars_density(geom, mf, mg, hydrovsbar);
   amrex::Gpu::synchronize();  AMREX_GPU_ERROR_CHECK();
-  thermal_noise(geom, fnoisevs, gnoisevs, rho_eq, phi_eq, rhot_eq); // rho_eq, phi_eq, rhot_eq here have no meaningful values, since kBT=0.;
+  RealVect pos_com;
+  update_com(geom, pos_com, hydrovsbar);
+  thermal_noise(geom, fnoisevs, gnoisevs, rho_eq, phi_eq, rhot_eq, pos_com); // rho_eq, phi_eq, rhot_eq here have no meaningful values, since kBT=0.;
   amrex::Gpu::synchronize();  AMREX_GPU_ERROR_CHECK();
   LBM_hydrovars(geom, mf, mg, hydrovs, hydrovsbar, fnoisevs, gnoisevs);
   amrex::Gpu::synchronize();  AMREX_GPU_ERROR_CHECK();
@@ -692,7 +703,9 @@ inline void LBM_init_droplet(const Real r,
     }
   });
   LBM_hydrovars_density(geom, mf, mg, hydrovsbar);
-  thermal_noise(geom, fnoisevs, gnoisevs, rho_eq, phi_eq, rhot_eq);
+  RealVect pos_com;
+  update_com(geom, pos_com, hydrovsbar);
+  thermal_noise(geom, fnoisevs, gnoisevs, rho_eq, phi_eq, rhot_eq, pos_com);
   LBM_hydrovars(geom, mf, mg, hydrovs, hydrovsbar, fnoisevs, gnoisevs);
 }
 

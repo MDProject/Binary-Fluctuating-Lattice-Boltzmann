@@ -21,19 +21,72 @@ out_SF_step = 100   //select every 100 steps to calcualte Structure Factor;
 
 
 #####   1. Flate interface System:  #####
-box size (8, 256, 64), equilibrium state density: rho_lo = 0.1, rho_hi = 2.
+box size (8, 256, 64), equilibrium state density: rho_lo = 0.1, rho_hi = 3.   kappa = 0.1
 
 Step I: kBT = 0. --> equilibrium state
 alpha0 = 1.5, alpha1 = 0.
-nsteps = 2000
+nsteps = 3000
 step_continue = 0
 
 plot_int = 10 
 t_window = 50*plot_int;
 
 Step II: kBT = 1e-5 --> equilibrium state with thermal noise
-nsteps = 600000
-step_continue = 2000
+nsteps = 800000
+step_continue = 3000
 
-plot_int = 2000 // output configurations every 2000 steps;
-plot_SF_window = 0  // Do not use FHDeX lib to calculate the StructFactor, so set it to be 0; 
+plot_int = 1000 // output configurations every 1000 steps;
+plot_SF_window = 0  // Do not use FHDeX lib to calculate the StructFactor, so set it to be 0;
+
+
+
+
+
+#####   1. Droplet System:  #####
+
+Case I: box size (32, 32, 32)
+Step I: kBT = 0. --> equilibrium state, alpha0 = 4.0     kappa = 0.001 
+
+nsteps = 20000;
+out_step = noiseSwitch? step_continue: step_continue;// + nsteps/2;
+plot_int = 100;
+print_int = 200;      
+t_window = 10*plot_int; 
+out_noise_step = plot_int;    // output noise terms every [out_noise_step] steps;
+plot_SF_window = 0;
+
+
+For alpha0 = 4. initialize droplet with rho_lo = 0., rho_hi = 1., kappa = 0.001
+
+For alpha0 = 1.5 initialize droplet with rho_lo = 0., rho_hi = 3. init_r0 = 0.2, kappa = 0.1
+For alpha0 = 1.5 initialize droplet with rho_lo = 0., rho_hi = 3. init_r0 = 0.225, kappa = 0.1
+For alpha0 = 1.5 initialize droplet with rho_lo = 0., rho_hi = 3. init_r0 = 0.25, kappa = 0.1
+For alpha0 = 1.5 initialize droplet with rho_lo = 0., rho_hi = 3. init_r0 = 0.275, kappa = 0.1
+For alpha0 = 1.5 initialize droplet with rho_lo = 0., rho_hi = 3. init_r0 = 0.3, kappa = 0.1
+
+For alpha0 = 2.5 initialize droplet with rho_lo = 0., rho_hi = 2., suggest to use kappa = 0.1 to avoid numerical instability due to the sharp interface
+Here for init_r0 = 0.15, cannot fit the droplet radius with default precision!
+init_r0 = 0.25, 0.35
+
+Step II: kBT = 1e-5
+step_continue = 20000
+nsteps = 600000
+out_step = noiseSwitch? step_continue + 2*nsteps/3: step_continue;
+plot_int = 500;
+
+
+Case II: box size (64, 64, 64)
+
+Step I: kBT = 0. --> equilibrium state, alpha0 = 1.5     kappa = 0.1
+nsteps = 50000;
+plot_int = 200;
+print_int = 100;      
+t_window = 50*plot_int; 
+out_noise_step = plot_int;    // output noise terms every [out_noise_step] steps;
+plot_SF_window = 0;
+
+Step II: kBT = 1e-5
+step_continue = 50000
+nsteps = 600000
+out_step = noiseSwitch? step_continue + 2*nsteps/3: step_continue;
+plot_int = 500;

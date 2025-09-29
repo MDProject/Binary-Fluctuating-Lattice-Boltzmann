@@ -25,7 +25,7 @@ extern std::vector<std::vector<Real>> getCombNomial(int n_max);
 
 AMREX_GPU_HOST AMREX_FORCE_INLINE
 void update_com(const Geometry& geom, RealVect& pos_com,
-		    MultiFab& hydrovsbar) {
+		    MultiFab& hydrovsbar, bool printDetails=false) {
     const BoxArray& ba = hydrovsbar.boxArray();
     const DistributionMapping& dm = hydrovsbar.DistributionMap();
     const IntVect box = geom.Domain().length();
@@ -36,20 +36,26 @@ void update_com(const Geometry& geom, RealVect& pos_com,
     MultiFab rhoY(ba, dm, ncomp, 0);
     MultiFab rhoZ(ba, dm, ncomp, 0);
     for (MFIter mfi(hydrovsbar); mfi.isValid(); ++mfi) {
-        const Box& valid_box = mfi.validbox();
+        //Print() << "Update COM: processing grid " << mfi.index() << "\n";
+        const Box& validbox = mfi.validbox();
         Array4<Real> const& hydrovsbar_array4 = hydrovsbar.array(mfi); // This function include ghost layers by default;
         Array4<Real> const& rhoX_array4 = rhoX.array(mfi);
         Array4<Real> const& rhoY_array4 = rhoY.array(mfi);
         Array4<Real> const& rhoZ_array4 = rhoZ.array(mfi);
-        ParallelFor(valid_box, [=] AMREX_GPU_HOST_DEVICE(int i, int j, int k){
+        ParallelFor(validbox, [=] AMREX_GPU_HOST_DEVICE(int i, int j, int k){
             rhoX_array4(i,j,k,0) = hydrovsbar_array4(i,j,k,0)*i; // comp = 0 for fluid f density
             rhoY_array4(i,j,k,0) = hydrovsbar_array4(i,j,k,0)*j;
             rhoZ_array4(i,j,k,0) = hydrovsbar_array4(i,j,k,0)*k;
         });
     }
+    Print() << "\n";
+    Gpu::synchronize();
     Real mass = hydrovsbar.sum(0);
-    pos_com = { rhoX.sum(0)/mass, rhoY.sum(0)/mass, rhoZ.sum(0)/mass };
-    Print() << "Center of Mass: (" << pos_com[0] << "," << pos_com[1] << "," << pos_com[2] << ")\n";
+    Print() << "Total mass: " << mass << "\n";
+    pos_com[0] = rhoX.sum(0)/mass;
+    pos_com[1] = rhoY.sum(0)/mass;
+    pos_com[2] = rhoZ.sum(0)/mass;
+    if(printDetails) { Print() << "Center of Mass: (" << pos_com[0] << "," << pos_com[1] << "," << pos_com[2] << ")\n"; }
 }
 
 AMREX_GPU_HOST

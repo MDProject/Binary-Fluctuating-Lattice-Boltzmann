@@ -24,6 +24,53 @@ To your makefile
 
 const Real PI = 3.1415926;
 
+#include <AMReX.H>
+#include <AMReX_MultiFab.H>
+#include <AMReX_Gpu.H>
+#include <AMReX_Reduce.H>
+#include <AMReX_ParallelDescriptor.H>
+
+using namespace amrex;
+
+Real MultiFabValidSum (MultiFab const& mf){
+    auto const& ma = mf.const_arrays();
+    return ParReduce(TypeList<ReduceOpSum>{}, TypeList<Real>{},
+                     mf, IntVect(0), // zero ghost cells
+           [=] AMREX_GPU_DEVICE (int box_no, int i, int j, int k)
+               noexcept -> GpuTuple<Real>
+           {
+               Array4<Real const> const& a = ma[box_no];
+               Real mass = a(i,j,k,0);
+               return { mass };
+           });
+}
+
+// MultiFab Sum
+Real MultiFabValidSumAtomic (const MultiFab& mfab, int ncomp=0) {
+    Real total = 0.0;
+    Real* d_sum;
+
+    // calculate the fluctuation of component [ncomp]
+    amrex::Gpu::DeviceScalar<amrex::Real> total_device(0.0);
+
+    // Get device pointers for reduction
+    amrex::Real* total_ptr = total_device.dataPtr();
+
+    // Get the array of arrays for the MultiFab
+    auto const& mfab_multi_array4D = mfab.arrays();
+
+    // Launch the kernel to compute mean and count
+    amrex::ParallelFor(mfab, amrex::IntVect(0), [=] AMREX_GPU_HOST_DEVICE(int nbx, int x, int y, int z) {
+        amrex::Real value = mfab_multi_array4D[nbx](x, y, z, ncomp);
+        amrex::Gpu::Atomic::Add(total_ptr, value);
+    });
+    // Synchronize to ensure the kernel has completed
+    amrex::Gpu::synchronize();
+    // Copy results back to the host
+    amrex::Gpu::copy(amrex::Gpu::deviceToHost, total_device.dataPtr(), total_device.dataPtr() + 1, &total);
+    return total;
+}
+
 
 #ifdef AMREX_USE_CUDA
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
@@ -288,7 +335,10 @@ void PrintConvergence(std::string plot_file_root, int step1, int step2, int step
     hydrovs_deviation.mult(1./Nsteps);
     // if passing in true, then using the ensemble average mean as equilibrium state solution and save it into [mfab_ref]
     if(ifSave){
-        mfab_ref.copy(hydrovs_mean, 0, 0, 1);   // derived from BaseFab member function;
+        //mfab_ref.copy(hydrovs_mean, 0, 0, 1);   // derived from BaseFab member function;
+        // !!!! USE ParallelCopy instead of copy here; otherwise error may occur when reading in multifab from DISK !!!!
+        // mfab_ref.ParallelCopy(hydrovs_mean, 0, 0, 1);
+        amrex::ParallelCopy(mfab_ref, hydrovs_mean, 0/*srccomp*/, 0/*dstcomp*/, 1);
     }
 
     // calculate the p-residues (p=1 or \infty) for ensemble MultiFabs stored in array [hydrovs_readin_array];
@@ -371,6 +421,30 @@ void PrintCudaMem(string str_tag){
     std::cout << "Used: " << used_mem / (1024 * 1024) << " MB\n";
 }
 #endif
+
+void print_multifab_info(MultiFab& mfab, std::string mfab_name){
+    Print() << "MultiFab " << mfab_name << " info: \n";
+    Print() << "Number of components: " << mfab.nComp() << '\n';
+    Print() << "Number of ghost cells: " << mfab.nGrow() << '\n';
+    Print() << "BoxArray size: " << mfab.boxArray().size() << '\n';
+    Print() << "DistributionMap size: " << mfab.DistributionMap().size() << '\n';
+    const BoxArray& ba = mfab.boxArray();
+    Box domain_box = ba.minimalBox();
+    IntVect total_size = domain_box.size();
+    Print() << "Domain box: " << domain_box << '\n';
+
+    for (int i = 0; i < ba.size(); ++i) {
+      Print() << "Grid " << i << ": " << ba[i] << "\n";
+    }
+    const DistributionMapping& dm = mfab.DistributionMap();
+    for (int i = 0; i < dm.size(); ++i) {
+      Print() << "Grid " << i << " assigned to rank " << dm[i] << "\n";
+    }
+}
+
+
+
+
 
 
 #endif

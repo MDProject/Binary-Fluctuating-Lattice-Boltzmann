@@ -7,7 +7,7 @@ AMREX_GPU_MANAGED Real cs2 = 1./3.;
 AMREX_GPU_MANAGED Real cs4 = (1./3.) * (1./3.);
 //AMREX_GPU_MANAGED Real local_mass = T/cs2;//0.;
 
-AMREX_GPU_MANAGED Real kBT = 1e-4;//1e-5;//0.;//cs2*local_mass;
+AMREX_GPU_MANAGED Real kBT = 1e-5;//0.;//cs2*local_mass;
 
 
 AMREX_GPU_MANAGED IntVect c[19] = {

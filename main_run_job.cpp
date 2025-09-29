@@ -18,9 +18,12 @@ using namespace amrex;
 #define STRUCT_HYDROVARS
 //#define STRUCT_LB_HYDROVARS
 
-//#define SYS_DROPLET
+#define PLOT_POPULATIONS
+
+
+#define SYS_DROPLET
 //#define SYS_MIXTURE
-#define SYS_FLATE_INTERFACE
+//#define SYS_FLATE_INTERFACE
 
 const string root_path = ".";   //"/home/xdengae/Binary-Fluctuating-Lattice-Boltzmann/";
 const int Ndigits = 7;
@@ -59,7 +62,7 @@ int main(int argc, char* argv[]) {
   // T=0: no noise, obtain the equilibrium state solutions; T>0: with noise;
   bool noiseSwitch = (kBT==0) ? false : true;
   // store the current time so we can later compute total run time.
-  Real strt_time = ParallelDescriptor::second();
+  Real start_time = ParallelDescriptor::second();
   int my_rank = amrex::ParallelDescriptor::MyProc(); 
   int nprocs = amrex::ParallelDescriptor::NProcs();
 
@@ -73,22 +76,22 @@ int main(int argc, char* argv[]) {
   // ************************************************  MAIN PARAMS SETTING   ******************************************************
   // *******************************************  change for each job *******************************************************************
   // set to be 0 for noise=0 case; set to be the step's number of the checkpoint file when noise != 0;
-  int step_continue = 0;//500;//1300400;//3500400;
+  int step_continue = 1240000;//500;//1300400;//3500400;
 
   // [true] for a: kBT=0; b: kBT>0 && switching on noise for the FIRST time;
   // [false] only if hope to continue from chkpoint in which noise>0;
-  bool continueFromNonFluct = true;//false;
+  bool continueFromNonFluct = false; //false;
 
   // Total number of steps to run; MUST be integer multiples of [plot_int];
-  int nsteps = 600000; // 2000
+  int nsteps = 40000;//1500000;//3000;
   // ouput trajectories from step >= Out_Step; by default, it is set to be the same as [step_continue];
-  int out_step = noiseSwitch? step_continue: step_continue + nsteps/2;
-  int plot_int = 2000;//10;//1000; // output configurations every [plot_int] steps;
-  int print_int = 200;      // print out info every [print_int] steps;
+  int out_step = noiseSwitch? step_continue + 0*nsteps/3: step_continue;
+  int plot_int = nsteps;//200;//100;//2000;//10; // output configurations every [plot_int] steps;
+  int print_int = 100;     // print out info every [print_int] steps;
   /*specifying time window for calculating the equilibrium state solution;
     usually be set as multiples of [plot_int], from step [last_step_index-t_window] to [last_step_index];
     i.e., [numOfFrames-1]*[plot_int], in which last_step_index is also multiples of [plot_int] */
-  const int t_window = 50*plot_int; 
+  const int t_window = 50*plot_int;
   int out_noise_step = plot_int;    // output noise terms every [out_noise_step] steps;
 
   // [plot_SF_window] is the time window for calculating the structure factor;
@@ -104,6 +107,7 @@ int main(int argc, char* argv[]) {
 #ifdef SYS_DROPLET
   // default droplet radius (% of box size), %.2f format
   const Real radius = 0.2;
+  bool if_print_radius = false; // print fitted droplet radius for each output frame;
 #endif
   // set up Box and Geomtry
   IntVect dom_lo(0, 0, 0);
@@ -114,7 +118,7 @@ int main(int argc, char* argv[]) {
 #endif
 #ifdef SYS_FLATE_INTERFACE
   nx = 8; ny = 256; nz = 64; // for flate interface with height = 64 lbu and stripe width = 8 lbu & length = 256 lbu
-  max_grid_size = nx;
+  //max_grid_size = 8;
   dom_hi = IntVect(nx-1, ny-1, nz-1);
 #endif
 #ifdef SYS_MIXTURE
@@ -140,11 +144,14 @@ int main(int argc, char* argv[]) {
   char plot_file_root_cstr[200];
   string plot_file_dir;
 #ifdef SYS_FLATE_INTERFACE
-    plot_file_dir = "data_interface";
+    char plot_file_dir_cstr[60];
+    sprintf(plot_file_dir_cstr, "data_interface_alpha0_%.2f", alpha0);
+    plot_file_dir.assign(plot_file_dir_cstr);
 #endif
 #ifdef SYS_DROPLET
-    char plot_file_dir_cstr[20];
-    sprintf(plot_file_dir_cstr, "data_droplet_%.2f", radius);
+    char plot_file_dir_cstr[60];
+    sprintf(plot_file_dir_cstr, "data_droplet_alpha0_%.2f_r%.2f_size%d-%d-%d", alpha0, radius,
+                          dom_hi[0]-dom_lo[0]+1, dom_hi[1]-dom_lo[1]+1, dom_hi[2]-dom_lo[2]+1);
     plot_file_dir.assign(plot_file_dir_cstr);
 #endif
 
@@ -203,15 +210,19 @@ int main(int argc, char* argv[]) {
     LoadSingleMultiFab(rho_eq_file, rho_eq);  // the ghost layers values are meaningless
     LoadSingleMultiFab(phi_eq_file, phi_eq);
     LoadSingleMultiFab(rhot_eq_file, rhot_eq);
-    rho_eq.FillBoundary(geom.periodicity());  // fill the ghost layers with the equilibrium state solution
-    phi_eq.FillBoundary(geom.periodicity());
-    rhot_eq.FillBoundary(geom.periodicity());
+    //rho_eq.FillBoundary(geom.periodicity());  // fill the ghost layers with the equilibrium state solution, why cannot work ??
+    //phi_eq.FillBoundary(geom.periodicity());
+    //rhot_eq.FillBoundary(geom.periodicity());
+    Print() << "Mass rho_eq = " << rho_eq.sum(0) << '\n';
+    Print() << "Mass rho_eq = " << MultiFabValidSum(rho_eq) << '\n';
+    Print() << "Mass rho_eq = " << MultiFabValidSumAtomic(rho_eq) << '\n';
     //printf("Numerical equilibrium state solution lower bound:\tmin rho_eq: %f\tmin phi_eq: %f\n", rho_eq.min(0), phi_eq.min(0));
   }else{
     Print() << "Noise switch off, calculating the equilibrium state solutions...\n";
   }
 
 #ifdef SYS_DROPLET
+    Vector<RealVect> com_ref; // reference center of mass position for equilibrium state;
   // *********************************** pre-processing numerical solution data for the droplet-equilibrium state  ************************************
 #endif
 
@@ -244,8 +255,31 @@ int main(int argc, char* argv[]) {
 #ifdef SYS_MIXTURE
     //PrintDensityFluctuation(hydrovs, var_names, -1); // check the data uniformity for mixture system only;
 #endif
+#ifdef SYS_DROPLET
+    MultiFab m_test(ba, dm, 1, nghost);
+    amrex::ParallelCopy(m_test, rhot_eq, 0/*srccomp*/, 0/*dstcomp*/, 1);
+    //rho_eq.minus(hydrovsbar, 0, 1, 0);
+    //PrintMultiFabComp(rho_eq);
+    for(int n=0; n<3; n++){
+      RealVect pos_com = {  0., 0., 0. };
+      switch(n){
+        case 0:
+          update_com(geom, pos_com, rho_eq, true);
+          break;
+        case 1:
+          update_com(geom, pos_com, phi_eq, true);
+          break;
+        case 2:
+          update_com(geom, pos_com, rhot_eq, true);
+          break;
+      }
+      com_ref.push_back(pos_com);
+    }
+    for (auto const& pos_com : com_ref) {
+        amrex::Print() << pos_com << "\n";
+    }
+#endif
   }else{  // running from initial default states;
-
 #ifdef SYS_MIXTURE
     Print() << "Init mixture system ...\n";
     LBM_init_mixture(geom, fold, gold, hydrovs, hydrovsbar, fnoisevs, gnoisevs, rho_eq, phi_eq, rhot_eq);
@@ -297,7 +331,7 @@ int main(int argc, char* argv[]) {
     if(step%print_int == 0){
       Print() << "LB step " << step << " info:\n";
     }
-    LBM_timestep(geom, fold, gold, fnew, gnew, hydrovs, hydrovsbar, fnoisevs, gnoisevs, rho_eq, phi_eq, rhot_eq);
+    LBM_timestep(geom, fold, gold, fnew, gnew, hydrovs, hydrovsbar, fnoisevs, gnoisevs, rho_eq, phi_eq, rhot_eq, com_ref);
 
     //PrintMultiFabComp(fold, 3, 0);
     if(noiseSwitch && step>=SF_start && step%out_SF_step == 0){
@@ -312,16 +346,18 @@ int main(int argc, char* argv[]) {
       Print() << "\tLB step " << step << " & Output" << std::endl;
       Print() << "\t**************************************\t" << std::endl;
       // ************************************* Running Process Monitor *******************************************
-      #ifdef SYS_DROPLET      
-        amrex::ParallelCopy(rhof, hydrovs, 0, 0, 1); // copy rho from hydrovs's 0th comp to rhof, i.e., density fluid f;
+      #ifdef SYS_DROPLET
+        amrex::ParallelCopy(rhof, hydrovs, 0/*srccomp*/, 0/*dstcomp*/, 1); // copy rho from hydrovs's 0th comp to rhof, i.e., density fluid f;
         Function3DAMReX func_rho(rhof, geom);
         RealVect vec_com = {0., 0., 0.};
         getCenterOfMass(vec_com, func_rho, NULL, true);
         printf("Center Of Mass: (%f,%f,%f)\n", vec_com[0], vec_com[1], vec_com[2]);
         // Fitting equilibrirum droplet radius; \frac{1}{2}\left(1+\tanh\frac{R-\left|\bm{r}-\bm{r}_{0}\right|}{\sqrt{2W}}\right)
-        Array<Real, 3> param_arr = fittingDropletParams(func_rho, 20, 0.005, 400, kappa, radius);  // last 20 steps ensemble mean, relative error < 0.005 bound;
-        printf("fitting parameters for equilibrium density rho: (W=%f, R=%f)\n", param_arr[0], param_arr[1]);
-        radius_frames.push_back(param_arr[1]); // store the radius for each frame;
+        if(if_print_radius){
+          Array<Real, 3> param_arr = fittingDropletParams(func_rho, 20, 0.01, 400, kappa, radius);  // last 20 steps ensemble mean, relative error < 0.005 bound;
+          printf("fitting parameters for equilibrium density rho: (W=%f, R=%f)\n", param_arr[0], param_arr[1]);
+          radius_frames.push_back(param_arr[1]); // store the radius for each frame;
+        }
       #endif
       if(step >= out_step && step!=step_continue+nsteps){
         WriteOutput(plot_file_root, step, hydrovs, var_names, geom, structFact, 0); // do not output [structFact] during running time;
@@ -341,7 +377,7 @@ int main(int argc, char* argv[]) {
   }
   #endif
 
-  // *****************************************************  Post-Processing  *********************************************************
+  // *****************************************************  Post-Processing *********************************************************
   // write out last frame checkpoint
   pltfile_f = amrex::Concatenate(check_point_root_f, step_continue+nsteps, Ndigits);
   pltfile_g = amrex::Concatenate(check_point_root_g, step_continue+nsteps, Ndigits);
@@ -361,7 +397,7 @@ int main(int argc, char* argv[]) {
 #endif
   // Call the timer again and compute the maximum difference between the start time
   // and stop time over all processors
-  Real stop_time = ParallelDescriptor::second() - strt_time;
+  Real stop_time = ParallelDescriptor::second() - start_time;
   ParallelDescriptor::ReduceRealMax(stop_time);
   amrex::Print() << "Run time = " << stop_time << std::endl;
 
