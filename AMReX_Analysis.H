@@ -25,7 +25,10 @@
 #include <stdexcept>
 #include "AMReX_FileIO.H"
 #include <AMReX_FabArray.H>
+
+#ifdef AMREX_USE_CUDA
 #include <cuda_runtime.h>
+#endif
 
 AMREX_GPU_HOST
 Real func3D_test(Real x, Real y, Real z, int n){

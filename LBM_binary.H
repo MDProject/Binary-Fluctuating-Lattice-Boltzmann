@@ -17,11 +17,17 @@
 AMREX_GPU_MANAGED unsigned long long seed = 12345ULL;  // A fixed seed for reproducibility in each independent CUDA program;
 AMREX_GPU_MANAGED Real tau_f = 1./2.; // tau=0.5*(1.+1./sqrt(3.)) minimizes spurious currents according to Swift et al.
 AMREX_GPU_MANAGED Real tau_g = 1./2.;
-AMREX_GPU_MANAGED Real alpha0 = 1.5;//4.;//1.5;//0.;//0.95; also = \mathcal{G} in paper;
+AMREX_GPU_MANAGED Real alpha0 = 4.; //1.7; //2.5;//4.;//1.5;//0.;//0.95; also = \mathcal{G} in paper;
 AMREX_GPU_MANAGED Real alpha1 = 0.;//alpha1;
+
+const bool use_SC_pseudo = false; // false: use density field directly; true: use SC pseudopotentials;
+const Real SC_ref_density = 1.0; // reference density for SC pseudopotential function;
+const Real rho_lo = 0.;
+const Real rho_hi = 1.0; //0.7; //3.;
+
 const Real epsilon = 1e-14;
 
-AMREX_GPU_MANAGED Real kappa = 0.1;
+AMREX_GPU_MANAGED Real kappa = 4; //3.;//0.1;
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
 Real equivDensityInv(Real density){
@@ -99,6 +105,7 @@ void thermal_noise(const Geometry& geom, MultiFab& fnoisevs, MultiFab& gnoisevs,
       Real phi = phi_eq(x_shift, y_shift, z_shift, 0);
       Real rhot = rhot_eq(x_shift, y_shift, z_shift, 0);  // equilibrium density
       #else
+      //Print() << "Not using reference state for thermal noise generation!" << '\n';
       Real rho = hydrovs(x, y, z, 0);
       Real phi = hydrovs(x, y, z, 1);
       Real rhot = rho + phi;  // current density
@@ -131,8 +138,9 @@ RealVect gradient(int x, int y, int z, const Array4<Real>& field, int icomp) {
     int xp = x + c[i][0];
     int yp = y + c[i][1];
     int zp = z + c[i][2];
+    Real SC_pseudo_neighbor = use_SC_pseudo ? SC_ref_density*(1.-exp(-field(xp,yp,zp,icomp)/SC_ref_density)) : field(xp,yp,zp,icomp);
     for (int dir=0; dir<3; dir++) {
-      gradient[dir] += w[i]/cs2*field(xp,yp,zp,icomp)*c[i][dir]; // icomp is the input field component index we hope to calculate
+      gradient[dir] += w[i]/cs2*SC_pseudo_neighbor*c[i][dir]; // icomp is the input field component index we hope to calculate
     }
     /*
     For D3Q19, \nabla_\alpha [field] = 1/cs^2*\sum_i *w_i n(r+e_i\Delta t)e_{i\alpha}
@@ -142,13 +150,16 @@ RealVect gradient(int x, int y, int z, const Array4<Real>& field, int icomp) {
 }
 
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+// transform density to SC pseudopotentials if needed
 Real laplacian(int x, int y, int z, const Array4<Real>& field, int icomp) {
   Real laplacian = 0.0;
+  Real SC_pseudo_center = use_SC_pseudo ? SC_ref_density*(1.-exp(-field(x,y,z,icomp)/SC_ref_density)) : field(x,y,z,icomp);
   for (int i=0; i<nvel; i++) {
     int xp = x + c[i][0];
     int yp = y + c[i][1];
     int zp = z + c[i][2];
-    laplacian += 2.*w[i]/cs2*(field(xp,yp,zp,icomp)-field(x,y,z,icomp));
+    Real SC_pseudo_neighbor = use_SC_pseudo ? SC_ref_density*(1.-exp(-field(xp,yp,zp,icomp)/SC_ref_density)) : field(xp,yp,zp,icomp);
+    laplacian += 2.*w[i]/cs2*(SC_pseudo_neighbor - SC_pseudo_center);
   }
   /*
     \nabla^2 [field] = \sum_i w_i*(n(r+e_i\Delta t) - n(r))/(0.5*cs^2*(\Delta t)^2)
@@ -169,7 +180,10 @@ RealVect grad_laplacian_2nd(int x, int y, int z, const Array4<Real>& field, int 
         int xp = xc + c[i][0];
         int yp = yc + c[i][1];
         int zp = zc + c[i][2];
-        gradient[dir] += 2.*w[i]*w[j]/cs4*(field(xp,yp,zp,icomp)-field(xc,yc,zc,icomp))*c[j][dir];
+
+        Real SC_pseudo_neighbor = use_SC_pseudo ? SC_ref_density*(1.-exp(-field(xp,yp,zp,icomp)/SC_ref_density)) : field(xp,yp,zp,icomp);
+        Real SC_pseudo_center = use_SC_pseudo ? SC_ref_density*(1.-exp(-field(xc,yc,zc,icomp)/SC_ref_density)) : field(xc,yc,zc,icomp);
+        gradient[dir] += 2.*w[i]*w[j]/cs4*(SC_pseudo_neighbor - SC_pseudo_center)*c[j][dir];
       }
     }
   }
@@ -213,6 +227,8 @@ void hydrovars(int x, int y, int z, // real density & momentum;
     jg[2] += gi*c[i][2];  // 8
   }
   // preparation for the acceleration of fluid; we should know that the acceleration field is same with the modified version;
+  // here we calculate the gradient and laplacian of SC pseudopotentials for acceleration calculation; 
+  //        see "Surface_Tension.ipynb" for expressions; density field rho/phi as input;
   const Array1D<RealVect,0,2> grad_laplacians = {
     grad_laplacian_2nd(x,y,z,hbar,0),
     grad_laplacian_2nd(x,y,z,hbar,1),
@@ -223,6 +239,9 @@ void hydrovars(int x, int y, int z, // real density & momentum;
     gradient(x,y,z,hbar,1),
   };
 
+  Real SC_pseudo_rho = use_SC_pseudo ? SC_ref_density*(1.-exp(-rho/SC_ref_density)) : rho;
+  Real SC_pseudo_phi = use_SC_pseudo ? SC_ref_density*(1.-exp(-phi/SC_ref_density)) : phi;
+
   for(int k=0; k<AMREX_SPACEDIM; k++){
     ufbar(k) = (std::abs(rho) > FLT_EPSILON) ? jf[k]/rho : 0.; // 2~4
     ugbar(k) = (std::abs(phi) > FLT_EPSILON) ? jg[k]/phi : 0.; // 6~8
@@ -232,8 +251,10 @@ void hydrovars(int x, int y, int z, // real density & momentum;
     // acceleration of fluid g;
     const RealVect grad_phi = grad(1);
     const RealVect grad_laplacian_phi = grad_laplacians(1);
-    afbar(k) = -cs2*(alpha0*grad_phi[k] + alpha1*grad_laplacian_phi[k]); // 9~11
-    agbar(k) = -cs2*(alpha0*grad_rho[k] + alpha1*grad_laplacian_rho[k]); // 12~14
+    afbar(k) = (std::abs(rho) > FLT_EPSILON)? -cs2*alpha0*SC_pseudo_rho*grad_phi[k]/rho : 0.; // 9~11
+    agbar(k) = (std::abs(phi) > FLT_EPSILON)? -cs2*alpha0*SC_pseudo_phi*grad_rho[k]/phi : 0.; // 12~14
+    //afbar(k) = -cs2*(alpha0*grad_phi[k] + alpha1*grad_laplacian_phi[k]); // 9~11
+    //agbar(k) = -cs2*(alpha0*grad_rho[k] + alpha1*grad_laplacian_rho[k]); // 12~14
   }
   // next, update the modified quantites to real quantities;
   RealVect nfvel = {nf(x,y,z,1), nf(x,y,z,2), nf(x,y,z,3)};
@@ -318,7 +339,7 @@ void hydrovars_bar_density(int x, int y, int z,
   hb(x,y,z,2+AMREX_SPACEDIM) = mf(0) + mg(0); // total density to be stored in 5;
 }
 
-// calculate modified hydrodynamic moments for whole lattice
+// calculate modified hydrodynamic moments for whole lattice (densities + velocities only)
 inline void LBM_hydrovars_density(const Geometry& geom, MultiFab& mf, MultiFab& mg, MultiFab& hydrovsbar) {
   auto const & f = mf.arrays();
   auto const & g = mg.arrays();
@@ -646,18 +667,18 @@ void LBM_init_stripe(const Real frac, const Geometry& geom,
           MultiFab& fnoisevs, MultiFab& gnoisevs,
           MultiFab& rho_eq, MultiFab& phi_eq, MultiFab& rhot_eq) {
   
-  const Real rho_lo = 0.1;
-  const Real rho_hi = 3.;
+  //const Real rho_lo = 0.1;
+  //const Real rho_hi = 3.;
   GpuArray<Real,3> dx = geom.CellSizeArray();
   const IntVect box = geom.Domain().length();
-  const Real rho_t = rho_hi + rho_lo;
+  const Real rho_t = ::rho_hi + ::rho_lo;
   const Real pos_lo = (-0.5*frac)*box[2]; // position of the lower interface
   const Real pos_hi = (0.5*frac)*box[2]; // position of the upper interface
   auto const & f = mf.arrays();
   auto const & g = mg.arrays();
   ParallelFor(mf, IntVect(0), [=] AMREX_GPU_DEVICE(int nbx, int x, int y, int z) {
     const Real pos = z-box[2]/2;
-    const Real rho =  (rho_hi - rho_lo)*0.5*(std::tanh((pos-pos_lo)/std::sqrt(kappa)) + std::tanh((pos_hi-pos)/std::sqrt(kappa))) + rho_lo;
+    const Real rho =  (::rho_hi - ::rho_lo)*0.5*(std::tanh((pos-pos_lo)/std::sqrt(kappa)) + std::tanh((pos_hi-pos)/std::sqrt(kappa))) + ::rho_lo;
     for (int i=0; i<nvel; i++) {
       f[nbx](x,y,z,i) = w[i]*rho;
       g[nbx](x,y,z,i) = w[i]*(rho_t-rho);
@@ -705,13 +726,10 @@ inline void LBM_init_droplet(const Real r,
     const Real r2 = rx*rx+ry*ry+rz*rz;
 #endif
     const Real r = sqrt(r2);
-
-    const Real rho_lo = 0.;
-    const Real rho_hi = 3.;//1.;
-    const Real rho_tot = rho_hi + rho_lo;
+    const Real rho_tot = ::rho_hi + ::rho_lo;
     // tanh profile varying from [rho_lo] to [rho_hi], used for the density of fluid f;
-    const Real rho = (rho_hi - rho_lo)*(1.+tanh((R-r)/sqrt(kappa)))/2. + rho_lo;
-    // droplet is fluid f
+    const Real rho = (::rho_hi - ::rho_lo)*(1.+tanh((R-r)/sqrt(kappa)))/2. + ::rho_lo;
+    // droplet is fluid f surrounded by fluid g;
     for (int i=0; i<nvel; i++) {
       f[nbx](x,y,z,i) = w[i]*rho;
       g[nbx](x,y,z,i) = w[i]*(rho_tot - rho);

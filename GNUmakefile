@@ -1,8 +1,7 @@
-AMREX_HOME ?= ../amrex
-FHDEX_HOME ?= ../FHDeX
+AMREX_HOME ?= /usa/xdengae/Code/amrex
+FHDEX_HOME ?= /usa/xdengae/Code/FHDeX
 
-
-EIGEN_DIR = ../eigen/
+EIGEN_DIR = /usa/xdengae/Code/eigen/
 CXXFLAGS += -I$(EIGEN_DIR) -std=c++20
 CXXFLAGS += -I$(CURDIR)
 
@@ -16,7 +15,7 @@ COMP    = g++
 
 USE_MPI   = FALSE
 USE_OMP   = FALSE
-USE_CUDA  = TRUE
+USE_CUDA  = FALSE
 USE_HIP   = FALSE
 
 #CUDA_COMPILER = nvcc

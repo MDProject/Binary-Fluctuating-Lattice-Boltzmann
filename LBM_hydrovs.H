@@ -48,14 +48,15 @@ void update_com(const Geometry& geom, RealVect& pos_com,
             rhoZ_array4(i,j,k,0) = hydrovsbar_array4(i,j,k,0)*k;
         });
     }
-    Print() << "\n";
     Gpu::synchronize();
     Real mass = hydrovsbar.sum(0);
-    Print() << "Total mass: " << mass << "\n";
     pos_com[0] = rhoX.sum(0)/mass;
     pos_com[1] = rhoY.sum(0)/mass;
     pos_com[2] = rhoZ.sum(0)/mass;
-    if(printDetails) { Print() << "Center of Mass: (" << pos_com[0] << "," << pos_com[1] << "," << pos_com[2] << ")\n"; }
+    if(printDetails) { 
+        Print() << "Total mass: " << mass << "\n";
+        Print() << "Center of Mass: (" << pos_com[0] << "," << pos_com[1] << "," << pos_com[2] << ")\n"; 
+    }
 }
 
 AMREX_GPU_HOST
